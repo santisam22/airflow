@@ -73,6 +73,16 @@ def main():
     assert g.layout[(5, 4)]["type"] == "regboot"
     assert g.net.delivered > 100 and g.net.leaked < 1, (g.net.delivered, g.net.leaked)
     assert g.total_cov > 0.05
+    # air takes time to arrive: right after placing, the room is still empty...
+    assert app.disp_total < g.total_cov
+    # ...then the duct front reaches the register and the room fills
+    for _ in range(int(6 / 0.016)):
+        app.update(0.016)
+    frame(app)
+    assert app.disp_total > 0.6 * g.total_cov, (app.disp_total, g.total_cov)
+    R = app.anim.R
+    cy, cx = int(4.5 * R), int(3.5 * R)
+    assert app.anim.duct_speed(app.t)[cy, cx] > 0.3, "duct should be flowing"
     # aim with T while hovering
     app.selected = None
     app.handle(pygame.event.Event(pygame.MOUSEMOTION, pos=center(app, (5, 4)), rel=(0, 0), buttons=(0, 0, 0)))

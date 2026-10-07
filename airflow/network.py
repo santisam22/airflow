@@ -48,6 +48,7 @@ class Result:
     terminals: list = field(default_factory=list)
     room_cfm: dict = field(default_factory=dict)
     open_ports: dict = field(default_factory=dict)    # tile -> list of open dirs
+    port_flow: dict = field(default_factory=dict)     # (tile, dir) -> CFM through that port
 
 
 def solve(plan, layout, blower_level=0, liner_level=0):
@@ -225,10 +226,15 @@ def solve(plan, layout, blower_level=0, liner_level=0):
         res.part_flow[t] = float(through[i])
         res.part_k[t] = float(sum(port_map[t].values()))
     res.part_flow[ahu] = float(abs(flow_src))
+    for ei, (a, b, da, db) in enumerate(edges):
+        f = float(abs(flows_e[ei]))
+        res.port_flow[(tiles[a], da)] = f
+        res.port_flow[(tiles[b], db)] = f
     for si, s in enumerate(sinks):
         f = max(0.0, float(flows_s[si]))
         if s[2] == "leak":
             s[3].cfm = f
+            res.port_flow[(s[3].tile, s[3].dir)] = f
             res.leaked += f
             res.leaks.append(s[3])
         else:
@@ -237,6 +243,8 @@ def solve(plan, layout, blower_level=0, liner_level=0):
             res.terminals.append(s[3])
             res.room_cfm[s[3].room] = res.room_cfm.get(s[3].room, 0.0) + f
             pl = layout[s[3].tile]
+            inlet = (next(iter(BY_ID[pl["type"]].ports)) + pl["rot"]) % 4
+            res.port_flow[(s[3].tile, inlet)] = max(res.port_flow.get((s[3].tile, inlet), 0.0), f)
             res.part_k[s[3].tile] += BY_ID[pl["type"]].sink_k
     res.ahu_flow = float(abs(flow_src))
     res.static_pct = float(max(0.0, P[0]) / C.PMAX * 100.0)

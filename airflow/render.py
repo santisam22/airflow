@@ -79,7 +79,31 @@ def draw_part(p, pdef, placed, x0, y0, T, fill, outline, flow=0.0, theme=None, s
     if stage == "outline":
         p.poly(outline, poly, lw * 2)
         return
-    p.poly(fill, poly)
+    if stage == "stroke":
+        # crisp outline over the live flow field, open where this part joins a neighbour
+        joined = placed.get("_joined", ())
+        unit = [_rot(q, rot) for q in body_poly(pdef)]
+        n = len(unit)
+        for i in range(n):
+            (u1, v1), (u2, v2) = unit[i], unit[(i + 1) % n]
+            skip = False
+            for d in joined:
+                if d == 0 and abs(v1) < 1e-6 and abs(v2) < 1e-6:
+                    skip = True
+                elif d == 2 and abs(v1 - 1) < 1e-6 and abs(v2 - 1) < 1e-6:
+                    skip = True
+                elif d == 3 and abs(u1) < 1e-6 and abs(u2) < 1e-6:
+                    skip = True
+                elif d == 1 and abs(u1 - 1) < 1e-6 and abs(u2 - 1) < 1e-6:
+                    skip = True
+            if not skip:
+                a = (x0 + u1 * T, y0 + v1 * T)
+                b = (x0 + u2 * T, y0 + v2 * T)
+                p.line(outline, a, b, lw * 1.5)
+                p.circle(outline, a, lw * 0.75)
+        return
+    if stage != "deco":          # "deco": the body was painted by the live flow field
+        p.poly(fill, poly)
     if stage == "both":
         p.poly(outline, poly, lw)
 
@@ -199,6 +223,24 @@ class PlanView:
         self.ox = (mx - self.view.x) - (mx - x0) * k
         self.oy = (my - self.view.y) - (my - y0) * k
 
+    def layer(self, name, rgba, key, scale, cells_per_tile):
+        """Scale an RGBA array that covers the whole plan up to screen size (cached by key)."""
+        cache = self.__dict__.setdefault("_layers", {})
+        T = self.T
+        k = (key, round(T, 3), scale, rgba.shape)
+        hit = cache.get(name)
+        if hit and hit[0] == k:
+            return hit[1]
+        h, w = rgba.shape[:2]
+        small = pygame.image.frombuffer(rgba.tobytes(), (w, h), "RGBA").convert_alpha()
+        px = T * scale / cells_per_tile
+        size = (max(1, int(round(w * px))), max(1, int(round(h * px))))
+        if size[0] > w * 6:
+            small = pygame.transform.smoothscale(small, (w * 3, h * 3))
+        img = pygame.transform.smoothscale(small, size)
+        cache[name] = (k, img)
+        return img
+
     def heat_surface(self, speed, version, scale):
         T = self.T
         key = (version, round(T, 3), scale, speed.shape)
@@ -215,7 +257,8 @@ class PlanView:
         return self.heat_img
 
 
-def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0):
+def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0, anim_frame=None,
+              duct_cells=None, room_cov=None):
     plan = game.plan
     T = pv.T
     x0, y0 = pv.origin()
@@ -251,7 +294,10 @@ def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0):
             p.text(label, fsz, theme["furn_text"], (r[0] + r[2] / 2, r[1] + r[3] / 2), "center")
 
     # air
-    if show_heat and game.speed is not None:
+    if show_heat and anim_frame is not None:
+        img = pv.layer("heat", anim_frame[1], ("h", anim_frame[2]), p.s, C.CELLS)
+        p.blit(img, (x0, y0))
+    elif show_heat and game.speed is not None:
         img = pv.heat_surface(game.speed, version, p.s)
         p.blit(img, (x0, y0))
 
@@ -287,15 +333,31 @@ def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0):
             flow = net.part_flow.get(t, 0.0) if net else 0.0
             conn = net is not None and t in net.connected
             items.append((pdef, pl, pv.tile_xy(t), flow_color(flow, conn), flow))
-        for stage in ("outline", "fill"):
-            for pdef, pl, (tx, ty), fill, flow in items:
-                draw_part(p, pdef, pl, tx, ty, T, fill, theme["outline"], flow, theme, stage=stage)
+        if anim_frame is not None:
+            img = pv.layer("duct", anim_frame[0], ("d", anim_frame[2]), p.s, duct_cells)
+            p.blit(img, (x0, y0))
+            ahu = tuple(plan.ahu)
+            for (pdef, pl, (tx, ty), fill, flow), t in zip(items, game.layout.keys()):
+                joined = []
+                for d in abs_ports(pdef, pl["rot"]):
+                    nb = (t[0] + DIRS[d][0], t[1] + DIRS[d][1])
+                    other = game.layout.get(nb)
+                    if nb == ahu or (other and (d + 2) % 4 in abs_ports(BY_ID[other["type"]], other["rot"])):
+                        joined.append(d)
+                draw_part(p, pdef, dict(pl, _joined=joined), tx, ty, T, fill, theme["outline"], flow, theme,
+                          stage="stroke")
+                draw_part(p, pdef, pl, tx, ty, T, fill, theme["outline"], flow, theme, stage="deco")
+        else:
+            for stage in ("outline", "fill"):
+                for pdef, pl, (tx, ty), fill, flow in items:
+                    draw_part(p, pdef, pl, tx, ty, T, fill, theme["outline"], flow, theme, stage=stage)
 
     # room labels (over the ducts so they stay readable)
     lsz = max(8, min(14, int(T * 0.24)))
     for i, (name, rx, ry, rw, rh) in enumerate(plan.rooms):
         cx, cy = x0 + (rx + rw / 2) * T, y0 + (ry + rh / 2) * T
-        cov = game.room_cov[i] if i < len(game.room_cov) else 0.0
+        covs = room_cov if room_cov is not None else game.room_cov
+        cov = covs[i] if i < len(covs) else 0.0
         label = name.upper()
         lw_ = p.text_w(label, lsz, True)
         p.rect(theme["floor"] + (170,), (cx - lw_ / 2 - 5, cy - lsz * 1.35, lw_ + 10, lsz * 2.6), radius=5)

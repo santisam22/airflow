@@ -17,6 +17,7 @@ from .render import PlanView, draw_part, draw_plan, flow_color
 from .roomair import colormap, speed_to_t
 from .state import UPGRADES, ActionError, Game, upgrade_cost
 from .updater import Updater, whats_new_after_update
+from .anim import DETAIL_CELLS, DETAIL_HZ, FlowAnimator
 
 TOP_H = 66
 TABS_H = 30
@@ -73,6 +74,9 @@ class App:
         self.hover_tile = None
         self.running = True
         self.updater = Updater()
+        self.anim = FlowAnimator()
+        self.t = 0.0                  # animation clock (seconds)
+        self._anim_dirty = True
         self.update_dismissed = False
         self._toast("Pick a part below, then click the plan to place it. Connect ducts from the AHU into rooms!", 6)
         news = whats_new_after_update()
@@ -182,14 +186,33 @@ class App:
                 self.running = False
         was_dirty = self.game.dirty
         self.game.tick(min(dt, 0.25))
+        self.t += min(dt, 0.1)
         if was_dirty:
             self.version += 1
+        if was_dirty or self._anim_dirty or self.anim.plan_num != self.game.current:
+            if self.game.net is not None:
+                self.anim.on_sim(self.game, self.t, self.air_detail)
+                self._anim_dirty = False
+        self.anim.update(self.t, min(dt, 0.1), self.game.grid())
         if time.time() - self.last_save > C.AUTOSAVE_SECONDS:
             try:
                 self.game.save()
             except OSError:
                 pass
             self.last_save = time.time()
+
+    # what the player sees: coverage as the air actually fills the rooms
+    @property
+    def disp_total(self):
+        return self.anim.total_cov if self.anim.room_target is not None else self.game.total_cov
+
+    @property
+    def disp_rooms(self):
+        return self.anim.room_cov if self.anim.room_target is not None else self.game.room_cov
+
+    @property
+    def disp_avg(self):
+        return self.anim.avg_speed if self.anim.room_target is not None else self.game.avg_speed
 
     # ------------------------------------------------------------ drawing
     def draw(self):
@@ -210,7 +233,9 @@ class App:
         p.rect(th["bg"], (0, 0, W, H))
         show_heat = self.view_mode in (0, 2)
         show_ducts = self.view_mode in (0, 1)
-        draw_plan(p, th, self.game, self.pv, show_heat, show_ducts, self.version)
+        frame = self.anim.frame(self.t, DETAIL_HZ[self.air_detail])
+        draw_plan(p, th, self.game, self.pv, show_heat, show_ducts, self.version, anim_frame=frame,
+                  duct_cells=DETAIL_CELLS[self.air_detail], room_cov=self.disp_rooms)
         self.draw_overlays(view)
         self.draw_legend(view)
         self.draw_topbar()
@@ -333,7 +358,7 @@ class App:
             yy = bar_top + bar_h * (1 - t)
             p.line(th["muted"], (x + bw, yy), (x + bw + 4, yy), 1)
             p.text(f"{v:.2f}" if v < 1 else f"{v:.1f}", 8, th["muted"], (x + bw + 6, yy), "midleft")
-        avg = self.game.avg_speed
+        avg = self.disp_avg
         yy = bar_top + bar_h * (1 - float(speed_to_t(avg)))
         p.rect(th["outline"], (x - 3, yy - 2, bw + 6, 4), radius=2)
         p.text("AVG SPEED", 8, th["text"], (x, bar_top + bar_h + 10), bold=True)
@@ -369,7 +394,7 @@ class App:
         stats = [
             ("MONEY", fmt_money(g.money), None),
             ("INCOME (ALL PROJECTS)", f"+${g.total_income():.1f}/s", None),
-            ("AIR COVERAGE", f"{g.total_cov * 100:.0f}%", (g.total_cov, th["green"])),
+            ("AIR COVERAGE", f"{self.disp_total * 100:.0f}%", (self.disp_total, th["green"])),
             ("DELIVERED AIR", f"{g.net.delivered:.0f} CFM" if g.net else "0 CFM", None),
             ("METAL USED", f"{g.metal_used():g} / {g.metal_limit()}",
              (g.metal_used() / max(1, g.metal_limit()),
@@ -428,7 +453,7 @@ class App:
         x, y, w = r.x, r.y, r.w
         self.card(x, y, w, 92)
         p.text("AIR COVERAGE", 9, th["muted"], (x + 12, y + 10), bold=True)
-        p.text(f"{g.total_cov * 100:.0f}%", 30, th["text"], (x + 12, y + 24), bold=True)
+        p.text(f"{self.disp_total * 100:.0f}%", 30, th["text"], (x + 12, y + 24), bold=True)
         earn = g.project_income(g.current)
         full = g.plan.pay * g.income_mult()
         p.text(f"This project pays ${earn:.1f}/s of its ${full:.1f}/s", 11, th["text"], (x + 12, y + 66))
@@ -441,7 +466,7 @@ class App:
                 (f"Delivered to rooms: {n.delivered:.0f} CFM", th["text"]),
                 (f"Static pressure: {n.static_pct:.0f}% of blower max", th["text"]),
                 (f"Registers connected: {sum(1 for t in n.terminals if t.cfm > 0.5)}", th["text"]),
-                (f"Average room air speed: {g.avg_speed:.2f} m/s", th["text"]),
+                (f"Average room air speed: {self.disp_avg:.2f} m/s", th["text"]),
             ]
             if n.leaked > 0.5:
                 lines.append((f"Leaking into attic: {n.leaked:.0f} CFM", th["red"]))
@@ -468,7 +493,8 @@ class App:
         self.card(x, y, w, hh)
         p.text("ROOMS", 9, th["muted"], (x + 12, y + 10), bold=True)
         for i, (name, *_ ) in enumerate(rooms):
-            cov = g.room_cov[i] if i < len(g.room_cov) else 0.0
+            rc = self.disp_rooms
+            cov = rc[i] if i < len(rc) else 0.0
             yy = y + 30 + 22 * i
             p.text(name, 11, th["text"], (x + 12, yy))
             bx = x + w * 0.48
@@ -783,7 +809,8 @@ class App:
             return out
         room = g.plan.room_at(*t)
         if room >= 0:
-            cov = g.room_cov[room] if room < len(g.room_cov) else 0
+            rc = self.disp_rooms
+            cov = rc[room] if room < len(rc) else 0
             return [(g.plan.rooms[room][0], th["text"], True), (f"Air coverage: {cov * 100:.0f}%", th["text"], False)]
         return []
 
@@ -934,6 +961,7 @@ class App:
     def set_detail(self, i):
         self.air_detail = i
         self.version += 1
+        self._anim_dirty = True
 
     def set_dark(self, i):
         self.dark = bool(i)

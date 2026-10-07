@@ -26,6 +26,8 @@ def shot(app, name, mouse=None):
         app.mouse = mouse
         app.hover_tile = app.pv.tile_at(*mouse)
     app.update(0.016)
+    app.anim.settle(app.t)
+    app.update(0.016)
     app.draw()
     pygame.image.save(app.surf, os.path.join(sys.argv[1], name))
 

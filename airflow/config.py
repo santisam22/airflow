@@ -4,7 +4,7 @@ import os
 import sys
 
 APP_NAME = "Airflow"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 GITHUB_REPO = "santisam22/airflow"
 WEBSITE = "https://santisam22.github.io/airflow/"

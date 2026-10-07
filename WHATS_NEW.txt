@@ -1,1 +1,1 @@
-First release: build duct systems across four houses, with live airflow, room coverage and upgrades.
+Animated airflow: air now travels down your ducts, fades along long runs, and rooms fill up over time.
