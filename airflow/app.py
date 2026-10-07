@@ -1,0 +1,1183 @@
+"""Window, UI panels and input handling."""
+
+import math
+import os
+import sys
+import time
+
+import numpy as np
+import pygame
+
+from . import config as C
+from .painter import DARK, LIGHT, Painter
+from .parts import (BY_ID, CATEGORIES, DAMPER_LEVELS, DIRS, REWARDS, abs_ports, by_category, default_aim,
+                    fmt_money, fmt_price)
+from .projects import PROJECTS, project, room_count
+from .render import PlanView, draw_part, draw_plan, flow_color
+from .roomair import colormap, speed_to_t
+from .state import UPGRADES, ActionError, Game, upgrade_cost
+from .updater import Updater, whats_new_after_update
+
+TOP_H = 66
+TABS_H = 30
+LEGEND_W = 66
+PANEL_W = 300
+BOTTOM_H = 158
+HINT_H = 24
+
+EFF_COLORS = {1: (52, 84, 230), 2: (40, 170, 235), 3: (80, 200, 70), 4: (240, 200, 30), 5: (230, 60, 60)}
+PANELS = ["STATS", "UPGRADES", "PROJECTS", "APPEARANCE"]
+STRAIGHTS = {"galv", "flex"}
+
+
+class App:
+    def __init__(self, headless=False):
+        pygame.init()
+        pygame.key.set_repeat(0)
+        self.headless = headless
+        self.window = None
+        if headless:
+            size = headless if isinstance(headless, tuple) else (1400, 860)
+            pygame.display.set_mode((1, 1))
+            self.scale = 2.0
+            self.logical = size
+            self.surf = pygame.Surface((int(size[0] * 2), int(size[1] * 2)))
+        else:
+            self._open_window()
+        self.p = Painter(self.surf, self.scale)
+        self.game = Game.load()
+        self.pv = PlanView()
+        self.clock = pygame.time.Clock()
+        self.version = 0
+        self.last_save = time.time()
+
+        # UI state
+        self.category = 0
+        self.selected = None          # part id
+        self.ghost_rot = 0
+        self.ghost_aim = None
+        self.remove_mode = False
+        self.build_mode = True
+        self.panel = "STATS"
+        self.view_mode = 0            # 0 all, 1 ducts only, 2 air only
+        self.dark = False
+        self.air_detail = 1
+        self.palette_scroll = 0.0
+        self.buttons = []
+        self.toast = None
+        self.mouse = (0, 0)
+        self.drag = None              # dict describing current drag
+        self.selection = set()
+        self.clipboard = None
+        self.paste_mode = False
+        self.hover_tile = None
+        self.running = True
+        self.updater = Updater()
+        self.update_dismissed = False
+        self._toast("Pick a part below, then click the plan to place it. Connect ducts from the AHU into rooms!", 6)
+        news = whats_new_after_update()
+        if news:
+            v, notes = news
+            self._toast(f"Updated to Airflow {v}" + (f": {notes}" if notes else ""), 8)
+
+    # ------------------------------------------------------------ window
+    def _open_window(self):
+        dw, dh = (1440, 900)
+        try:
+            sizes = pygame.display.get_desktop_sizes()
+            if sizes:
+                dw, dh = sizes[0]
+        except Exception:
+            pass
+        w = int(min(1440, max(1000, dw - 60)))
+        h = int(min(900, max(680, dh - 90)))
+        try:
+            self.window = pygame.Window(C.APP_NAME, (w, h), resizable=True, allow_high_dpi=True)
+            self.window.minimum_size = (1000, 640)
+            self._refresh_surface()
+        except Exception:
+            self.window = None
+            screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
+            pygame.display.set_caption(C.APP_NAME)
+            self.surf = screen
+            self.scale = 1.0
+            self.logical = (w, h)
+
+    def _refresh_surface(self):
+        if self.window is None:
+            self.surf = pygame.display.get_surface()
+            self.logical = self.surf.get_size()
+            self.scale = 1.0
+        else:
+            self.surf = self.window.get_surface()
+            lw, lh = self.window.size
+            self.scale = self.surf.get_width() / max(1, lw)
+            self.logical = (lw, lh)
+        if hasattr(self, "p"):
+            self.p.set_surface(self.surf, self.scale)
+
+    def _flip(self):
+        if self.window is not None:
+            self.window.flip()
+        elif not self.headless:
+            pygame.display.flip()
+
+    # ------------------------------------------------------------ helpers
+    @property
+    def theme(self):
+        return DARK if self.dark else LIGHT
+
+    def _toast(self, msg, secs=2.5):
+        self.toast = (msg, time.time() + secs)
+
+    def act(self, action):
+        try:
+            self.game.apply(action)
+            self.version += 1
+            return True
+        except ActionError as e:
+            self._toast(str(e))
+            return False
+
+    def layout_rects(self):
+        W, H = self.logical
+        panel_open = self.panel is not None
+        bottom = BOTTOM_H + HINT_H if self.build_mode else HINT_H
+        right = PANEL_W + 20 if panel_open else 14
+        view = pygame.Rect(LEGEND_W + 8, TOP_H + TABS_H + 6, W - LEGEND_W - 8 - right,
+                           H - TOP_H - TABS_H - 12 - bottom)
+        return {
+            "view": view,
+            "panel": pygame.Rect(W - PANEL_W - 12, TOP_H + TABS_H + 6, PANEL_W, H - TOP_H - TABS_H - 12 - bottom),
+            "bottom": pygame.Rect(8, H - bottom, W - 16, BOTTOM_H - 8),
+            "hints": pygame.Rect(0, H - HINT_H, W, HINT_H),
+        }
+
+    def button(self, rect, cb, hover_ok=True):
+        self.buttons.append((pygame.Rect(rect), cb))
+        return pygame.Rect(rect).collidepoint(self.mouse)
+
+    # ------------------------------------------------------------ main loop
+    def run(self):
+        import os
+        smoke = os.environ.get("AIRFLOW_SMOKE")   # path: run ~3 s, save a screenshot, quit
+        start = time.time()
+        while self.running:
+            dt = self.clock.tick(60) / 1000.0
+            for ev in pygame.event.get():
+                self.handle(ev)
+            self.update(dt)
+            self.draw()
+            self._flip()
+            if smoke and time.time() - start > 3:
+                pygame.image.save(self.surf, smoke)
+                self.running = False
+        self.game.save()
+        pygame.quit()
+
+    def update(self, dt):
+        if not self.headless:
+            self.updater.tick()
+            if self.updater.ready_to_quit:
+                self.running = False
+        was_dirty = self.game.dirty
+        self.game.tick(min(dt, 0.25))
+        if was_dirty:
+            self.version += 1
+        if time.time() - self.last_save > C.AUTOSAVE_SECONDS:
+            try:
+                self.game.save()
+            except OSError:
+                pass
+            self.last_save = time.time()
+
+    # ------------------------------------------------------------ drawing
+    def draw(self):
+        th = self.theme
+        self.p.theme = th
+        self.buttons = []
+        p = self.p
+        W, H = self.logical
+        rects = self.layout_rects()
+        view = rects["view"]
+        if self.pv.fitted_for != self.game.current or self.pv.view.size != view.size:
+            if self.pv.fitted_for != self.game.current:
+                self.pv.fit(self.game.plan, view)
+            else:
+                self.pv.view = view
+        self.pv.view = view
+
+        p.rect(th["bg"], (0, 0, W, H))
+        show_heat = self.view_mode in (0, 2)
+        show_ducts = self.view_mode in (0, 1)
+        draw_plan(p, th, self.game, self.pv, show_heat, show_ducts, self.version)
+        self.draw_overlays(view)
+        self.draw_legend(view)
+        self.draw_topbar()
+        if self.panel:
+            self.draw_panel(rects["panel"])
+        if self.build_mode:
+            self.draw_palette(rects["bottom"])
+        self.draw_hints(rects["hints"])
+        self.draw_tooltip(view)
+        self.draw_toast(view)
+        self.draw_update_banner()
+
+    def draw_update_banner(self):
+        u = self.updater
+        info = u.available
+        busy = u.state in ("downloading", "restarting")
+        if u.state == "error":
+            msg, col = u.message, self.theme["red"]
+        elif busy:
+            msg, col = u.message, self.theme["accent"]
+        elif info and not self.update_dismissed:
+            notes = info.get("notes") or ""
+            msg = f"Airflow {info['version']} is available" + (f"  \u2022  {notes}" if notes else "")
+            col = self.theme["accent"]
+        else:
+            return
+        p = self.p
+        W, _ = self.logical
+        msg_w = min(p.text_w(msg, 11, True), W * 0.38)
+        lines = p.wrap(msg, 11, msg_w + 1, True)[:1]
+        msg = lines[0] if lines else msg
+        btn = "INSTALL & RESTART" if (info and u.state == "idle") else ("TRY AGAIN" if (u.state == "error" and info) else "")
+        bw = p.text_w(btn, 10, True) + 22 if btn else 0
+        w = p.text_w(msg, 11, True) + 30 + (bw + 8 if btn else 0) + (22 if not busy else 0)
+        x = W / 2 - w / 2
+        y = TOP_H + 4
+        p.rect(col, (x, y, w, 24), radius=12)
+        p.text(msg, 11, (255, 255, 255), (x + 14, y + 12), "midleft", bold=True)
+        bx = x + 14 + p.text_w(msg, 11, True) + 10
+        if btn:
+            r = (bx, y + 3, bw, 18)
+            hov = self.button(r, self.install_update)
+            p.rect((255, 255, 255) if hov else (235, 240, 255), r, radius=9)
+            p.text(btn, 10, col, (bx + bw / 2, y + 12), "center", bold=True)
+            bx += bw + 6
+        if not busy:
+            r = (bx, y + 3, 18, 18)
+            self.button(r, self.dismiss_update)
+            p.text("\u00d7", 14, (255, 255, 255), (bx + 9, y + 11), "center")
+
+    def install_update(self):
+        if self.updater.state == "error":
+            self.updater.state = "idle"
+        self.game.save()
+        self.updater.install()
+
+    def dismiss_update(self):
+        if self.updater.state == "error":
+            self.updater.state = "idle"
+            self.updater.message = ""
+        else:
+            self.update_dismissed = True
+
+    def draw_overlays(self, view):
+        p, th, pv, g = self.p, self.theme, self.pv, self.game
+        T = pv.T
+        p.clip(view)
+        # selection
+        for t in self.selection:
+            x, y = pv.tile_xy(t)
+            p.rect((60, 110, 255, 60), (x, y, T, T))
+            p.rect(th["accent"], (x, y, T, T), width=1.5)
+        if self.drag and self.drag.get("kind") == "select":
+            (ax, ay), (bx, by) = self.drag["start"], self.mouse
+            r = (min(ax, bx), min(ay, by), abs(bx - ax), abs(by - ay))
+            p.rect((60, 110, 255, 40), r)
+            p.rect(th["accent"], r, width=1)
+        ht = self.hover_tile
+        if ht and view.collidepoint(self.mouse) and self.build_mode and self._in_plan(ht):
+            x, y = pv.tile_xy(ht)
+            if self.paste_mode and self.clipboard:
+                for (dx, dy), pl in self.clipboard:
+                    t = (ht[0] + dx, ht[1] + dy)
+                    tx, ty = pv.tile_xy(t)
+                    ok = self._in_plan(t) and t != tuple(g.plan.ahu)
+                    draw_part(p, BY_ID[pl["type"]], pl, tx, ty, T, th["ghost"] if ok else th["ghost_bad"],
+                              th["muted"], theme=th)
+            elif self.remove_mode:
+                p.rect((230, 60, 60, 70), (x, y, T, T))
+                p.rect(th["red"], (x, y, T, T), width=2)
+            elif self.selected:
+                pdef = BY_ID[self.selected]
+                rot = self.smart_rot(self.selected, ht)
+                aim = self.ghost_aim if (self.ghost_aim is not None and rot == self.ghost_rot) \
+                    else default_aim(pdef, rot)
+                pl = {"type": self.selected, "rot": rot, "aim": aim}
+                bad = g.can_place(self.selected, ht)
+                draw_part(p, pdef, pl, x, y, T, th["ghost_bad"] if bad else th["ghost"], th["muted"], theme=th)
+            else:
+                p.rect(th["accent"], (x, y, T, T), width=1.2)
+        p.clip(None)
+
+    def draw_legend(self, view):
+        p, th = self.p, self.theme
+        x = 14
+        top = view.y + 4
+        p.text("VELOCITY", 9, th["text"], (x, top), bold=True)
+        p.text("MAGNITUDE (m/s)", 7, th["muted"], (x, top + 11), bold=True)
+        bar_top = top + 30
+        bar_h = max(120, view.h - 90)
+        bw = 12
+        steps = 80
+        for i in range(steps):
+            t = 1 - i / steps
+            rgb = tuple(int(c * 255) for c in colormap(np.array([t]))[0])
+            p.rect(rgb, (x, bar_top + bar_h * i / steps, bw, bar_h / steps + 1))
+        p.rect(th["border"], (x, bar_top, bw, bar_h), width=1, radius=3)
+        for v in (2.0, 1.7, 1.3, 1.0, 0.75, 0.57, 0.38, 0.22, 0.11, 0.03, 0.0):
+            t = float(speed_to_t(v))
+            yy = bar_top + bar_h * (1 - t)
+            p.line(th["muted"], (x + bw, yy), (x + bw + 4, yy), 1)
+            p.text(f"{v:.2f}" if v < 1 else f"{v:.1f}", 8, th["muted"], (x + bw + 6, yy), "midleft")
+        avg = self.game.avg_speed
+        yy = bar_top + bar_h * (1 - float(speed_to_t(avg)))
+        p.rect(th["outline"], (x - 3, yy - 2, bw + 6, 4), radius=2)
+        p.text("AVG SPEED", 8, th["text"], (x, bar_top + bar_h + 10), bold=True)
+        p.text(f"{avg:.2f} m/s", 9, th["text"], (x, bar_top + bar_h + 21))
+
+    def draw_topbar(self):
+        p, th, g = self.p, self.theme, self.game
+        W, _ = self.logical
+        p.rect(th["panel"], (0, 0, W, TOP_H))
+        p.line(th["border"], (0, TOP_H), (W, TOP_H), 1)
+        # logo
+        p.rect(th["accent"], (16, 12, 40, 40), radius=10)
+        cx, cy = 36, 32
+        for k in range(3):
+            a = k * 2 * math.pi / 3 - math.pi / 2
+            p.circle((255, 255, 255), (cx + math.cos(a) * 8, cy + math.sin(a) * 8), 6.5)
+        p.circle(th["accent"], (cx, cy), 4)
+        p.text(C.APP_NAME.upper(), 20, th["text"], (66, 12), bold=True)
+        plan = g.plan
+        p.text(f"PROJECT {plan.num}  •  {plan.name.upper()}  •  {len(plan.rooms)} rooms", 11,
+               th["muted"], (67, 38))
+
+        # build-mode button sits under the title bar
+        bx, by = 16, TOP_H + 4
+        label = "EXIT BUILD MODE" if self.build_mode else "ENTER BUILD MODE"
+        bw = p.text_w(label, 10, True) + 44
+        hov = self.button((bx, by, bw, 22), self.toggle_build)
+        p.rect(th["accent"] if self.build_mode else th["green"], (bx, by, bw, 22), radius=6)
+        p.text(label, 10, (255, 255, 255), (bx + 12, by + 11), "midleft", bold=True)
+        p.text("B", 10, (210, 220, 255), (bx + bw - 12, by + 11), "midright", bold=True)
+
+        # stats
+        stats = [
+            ("MONEY", fmt_money(g.money), None),
+            ("INCOME (ALL PROJECTS)", f"+${g.total_income():.1f}/s", None),
+            ("AIR COVERAGE", f"{g.total_cov * 100:.0f}%", (g.total_cov, th["green"])),
+            ("DELIVERED AIR", f"{g.net.delivered:.0f} CFM" if g.net else "0 CFM", None),
+            ("METAL USED", f"{g.metal_used():g} / {g.metal_limit()}",
+             (g.metal_used() / max(1, g.metal_limit()),
+              th["red"] if g.metal_used() >= g.metal_limit() - 1 else th["accent"])),
+        ]
+        x = W - 16
+        widths = [96, 150, 110, 112, 104]
+        for (title, val, bar), w in reversed(list(zip(stats, widths))):
+            x -= w
+            p.text(title, 9, th["muted"], (x, 14))
+            p.text(val, 17, th["text"], (x, 28), bold=True)
+            if bar:
+                frac, col = bar
+                p.rect(th["border"], (x, 52, w - 18, 3), radius=2)
+                p.rect(col, (x, 52, (w - 18) * max(0.0, min(1.0, frac)), 3), radius=2)
+            if title != "MONEY":
+                p.line(th["border"], (x - 10, 14), (x - 10, 54), 1)
+
+        # panel tabs
+        tx = W - 12
+        for name in reversed(PANELS):
+            tw = p.text_w(name, 10, True) + 22
+            tx -= tw + 4
+            active = self.panel == name
+            r = (tx, TOP_H + 5, tw, 21)
+            hov = self.button(r, lambda n=name: self.toggle_panel(n))
+            p.rect(th["accent"] if active else (th["panel2"] if not hov else th["border"]), r, radius=6)
+            p.text(name, 10, (255, 255, 255) if active else th["muted"], (tx + tw / 2, TOP_H + 15.5), "center",
+                   bold=True)
+
+    # ------------------------------------------------------------ right panel
+    def draw_panel(self, r):
+        p, th = self.p, self.theme
+        p.rect(th["shadow"], (r.x + 2, r.y + 3, r.w, r.h), radius=12)
+        p.rect(th["panel"], r, radius=12)
+        p.rect(th["border"], r, width=1, radius=12)
+        title = self.panel.title()
+        p.text(title, 15, th["text"], (r.x + 16, r.y + 14), bold=True)
+        close = (r.right - 34, r.y + 10, 24, 24)
+        self.button(close, lambda: self.toggle_panel(None))
+        p.text("×", 20, th["muted"], (close[0] + 12, close[1] + 11), "center")
+        p.line(th["border"], (r.x, r.y + 44), (r.right, r.y + 44), 1)
+        inner = pygame.Rect(r.x + 12, r.y + 54, r.w - 24, r.h - 64)
+        p.clip(inner)
+        getattr(self, "panel_" + self.panel.lower())(inner)
+        p.clip(None)
+
+    def card(self, x, y, w, h):
+        p, th = self.p, self.theme
+        p.rect(th["panel2"], (x, y, w, h), radius=10)
+        p.rect(th["border"], (x, y, w, h), width=1, radius=10)
+
+    def panel_stats(self, r):
+        p, th, g = self.p, self.theme, self.game
+        n = g.net
+        x, y, w = r.x, r.y, r.w
+        self.card(x, y, w, 92)
+        p.text("AIR COVERAGE", 9, th["muted"], (x + 12, y + 10), bold=True)
+        p.text(f"{g.total_cov * 100:.0f}%", 30, th["text"], (x + 12, y + 24), bold=True)
+        earn = g.project_income(g.current)
+        full = g.plan.pay * g.income_mult()
+        p.text(f"This project pays ${earn:.1f}/s of its ${full:.1f}/s", 11, th["text"], (x + 12, y + 66))
+        y += 102
+        lines = []
+        if n:
+            lines = [
+                (f"Blower (free air): {n.blower_free:.0f} CFM", th["text"]),
+                (f"Moving through ducts: {n.ahu_flow:.0f} CFM", th["text"]),
+                (f"Delivered to rooms: {n.delivered:.0f} CFM", th["text"]),
+                (f"Static pressure: {n.static_pct:.0f}% of blower max", th["text"]),
+                (f"Registers connected: {sum(1 for t in n.terminals if t.cfm > 0.5)}", th["text"]),
+                (f"Average room air speed: {g.avg_speed:.2f} m/s", th["text"]),
+            ]
+            if n.leaked > 0.5:
+                lines.append((f"Leaking into attic: {n.leaked:.0f} CFM", th["red"]))
+        hh = 30 + 17 * len(lines)
+        self.card(x, y, w, hh)
+        p.text("AIRFLOW", 9, th["muted"], (x + 12, y + 10), bold=True)
+        for i, (t, col) in enumerate(lines):
+            p.text(t, 11, col, (x + 12, y + 27 + 17 * i))
+        y += hh + 10
+        insp = self.inspect_lines()
+        hh = 34 + 16 * max(1, len(insp))
+        self.card(x, y, w, hh)
+        p.text("INSPECTOR", 9, th["muted"], (x + 12, y + 10), bold=True)
+        if not insp:
+            p.text("Hover any part or room to inspect it.", 11, th["text"], (x + 12, y + 28))
+        yy = y + 28
+        for t, col, bold in insp:
+            for ln in p.wrap(t, 11, w - 24, bold):
+                p.text(ln, 11, col, (x + 12, yy), bold=bold)
+                yy += 16
+        y += max(hh, yy - y + 8) + 10
+        rooms = g.plan.rooms
+        hh = 32 + 22 * len(rooms)
+        self.card(x, y, w, hh)
+        p.text("ROOMS", 9, th["muted"], (x + 12, y + 10), bold=True)
+        for i, (name, *_ ) in enumerate(rooms):
+            cov = g.room_cov[i] if i < len(g.room_cov) else 0.0
+            yy = y + 30 + 22 * i
+            p.text(name, 11, th["text"], (x + 12, yy))
+            bx = x + w * 0.48
+            bw = w * 0.34
+            p.rect(th["border"], (bx, yy + 4, bw, 7), radius=4)
+            col = tuple(int(c * 255) for c in colormap(np.array([0.25 + 0.55 * cov]))[0])
+            p.rect(col, (bx, yy + 4, bw * cov, 7), radius=4)
+            p.text(f"{cov * 100:.0f}%", 11, th["text"], (x + w - 12, yy), "topright")
+
+    def panel_upgrades(self, r):
+        p, th, g = self.p, self.theme, self.game
+        x, y, w = r.x, r.y, r.w
+        effects = {
+            "blower": lambda l: f"Airflow x{1 + 0.1 * l:.2f}",
+            "liner": lambda l: f"Friction x{max(0.05, 1 - 0.05 * l):.2f}",
+            "service": lambda l: f"Income x{1 + 0.13 * l:.2f}",
+            "material": lambda l: f"Metal limit +{l}",
+        }
+        for uid, title, eff, mx, _ in UPGRADES:
+            lvl = g.upgrades[uid]
+            self.card(x, y, w, 112)
+            p.text(title, 9, th["muted"], (x + 12, y + 10), bold=True)
+            p.text(eff, 11, th["text"], (x + 12, y + 26))
+            p.text(f"Level {lvl} / {mx}  •  {effects[uid](lvl)}", 11, th["text"], (x + 12, y + 42))
+            seg_w = (w - 24) / mx
+            for i in range(mx):
+                p.rect(th["green"] if i < lvl else th["border"], (x + 12 + i * seg_w, y + 61, seg_w - 2, 4), radius=2)
+            # -1 button
+            r1 = (x + 12, y + 74, 44, 26)
+            self.button(r1, lambda u=uid: self.act({"kind": "downgrade", "id": u}))
+            p.rect(th["panel"], r1, radius=6)
+            p.rect(th["border"], r1, width=1, radius=6)
+            p.text("-1", 11, th["muted"], (r1[0] + 22, r1[1] + 13), "center", bold=True)
+            r2 = (x + 62, y + 74, w - 74, 26)
+            if lvl >= mx:
+                p.rect(th["border"], r2, radius=6)
+                p.text("MAXED", 11, th["muted"], (r2[0] + r2[2] / 2, r2[1] + 13), "center", bold=True)
+            else:
+                cost = upgrade_cost(uid, lvl)
+                ok = g.money >= cost
+                hov = self.button(r2, lambda u=uid: self.act({"kind": "upgrade", "id": u}))
+                col = th["green"] if ok else th["border"]
+                if ok and hov:
+                    col = tuple(max(0, c - 25) for c in col)
+                p.rect(col, r2, radius=6)
+                p.text(f"UPGRADE  {fmt_money(cost)}", 11, (255, 255, 255) if ok else th["muted"],
+                       (r2[0] + r2[2] / 2, r2[1] + 13), "center", bold=True)
+            y += 122
+
+    def panel_projects(self, r):
+        p, th, g = self.p, self.theme, self.game
+        x, y, w = r.x, r.y - self.panel_scroll_y(), r.w
+        nxt = max(g.owned) + 1
+        for pr in PROJECTS:
+            owned = pr.num in g.owned
+            cur = pr.num == g.current
+            h = 108 if owned else 96
+            if y + h > r.y - 10 and y < r.bottom + 10:
+                self.card(x, y, w, h)
+                if cur:
+                    p.rect(th["green"], (x, y, w, h), width=1.5, radius=10)
+                p.text(f"PROJECT {pr.num}  •  {pr.name.upper()}", 9, th["muted"], (x + 12, y + 10), bold=True)
+                size = f"{pr.w} x {pr.h}"
+                if pr.floors > 1:
+                    size = f"{pr.floors} floors  •  " + size
+                metal = pr.metal + g.upgrades["material"]
+                p.text(f"{size}  •  {room_count(pr)} rooms  •  metal limit {metal}", 11, th["text"],
+                       (x + 12, y + 26))
+                p.text(f"Pays ${pr.pay:.0f}/s at 100% coverage" if pr.pay >= 100 else
+                       f"Pays ${pr.pay:.1f}/s at 100% coverage", 11, th["text"], (x + 12, y + 42))
+                by = y + 62
+                if owned:
+                    cov = g.coverage.get(pr.num, 0.0)
+                    p.text(f"Coverage {cov * 100:.0f}%  •  earning ${g.project_income(pr.num):.1f}/s", 11,
+                           th["text"], (x + 12, y + 58))
+                    p.rect(th["border"], (x + 12, y + 75, w - 24, 3), radius=2)
+                    p.rect(th["green"], (x + 12, y + 75, (w - 24) * cov, 3), radius=2)
+                    by = y + 82
+                br = (x + 12, by, w - 24, 22)
+                if cur:
+                    p.rect(th["border"], br, radius=6)
+                    p.text("CURRENT JOB", 10, th["muted"], (br[0] + br[2] / 2, by + 11), "center", bold=True)
+                elif owned:
+                    hov = self.button(br, lambda n=pr.num: self.goto(n))
+                    p.rect(th["accent_soft"] if not hov else th["accent"], br, radius=6)
+                    p.text("GO TO PROJECT", 10, th["accent"] if not hov else (255, 255, 255),
+                           (br[0] + br[2] / 2, by + 11), "center", bold=True)
+                elif pr.num == nxt and pr.playable:
+                    ok = g.money >= pr.buy
+                    hov = self.button(br, lambda n=pr.num: self.buy(n))
+                    col = th["green"] if ok else th["border"]
+                    if ok and hov:
+                        col = tuple(max(0, c - 25) for c in col)
+                    p.rect(col, br, radius=6)
+                    p.text(f"BUY  {fmt_money(pr.buy)}", 10, (255, 255, 255) if ok else th["muted"],
+                           (br[0] + br[2] / 2, by + 11), "center", bold=True)
+                else:
+                    p.rect(th["border"], br, radius=6)
+                    label = "LOCKED" if pr.playable else "COMING SOON"
+                    p.text(label, 10, th["muted"], (br[0] + br[2] / 2, by + 11), "center", bold=True)
+            y += h + 10
+        self._projects_content_h = y + self.panel_scroll_y() - r.y
+
+    def panel_scroll_y(self):
+        return getattr(self, "_proj_scroll", 0.0)
+
+    def panel_appearance(self, r):
+        p, th = self.p, self.theme
+        x, y, w = r.x, r.y, r.w
+
+        def choice(label, options, cur, cb, y):
+            self.card(x, y, w, 40 + 30 * len(options))
+            p.text(label, 9, th["muted"], (x + 12, y + 10), bold=True)
+            for i, opt in enumerate(options):
+                br = (x + 12, y + 30 + 30 * i, w - 24, 24)
+                act = i == cur
+                hov = self.button(br, lambda i=i: cb(i))
+                p.rect(th["green"] if act else (th["border"] if hov else th["panel"]), br, radius=6)
+                p.text(opt, 11, (255, 255, 255) if act else th["text"], (br[0] + br[2] / 2, br[1] + 12), "center",
+                       bold=act)
+            return y + 50 + 30 * len(options)
+
+        y = choice("AIR DETAIL", ["LOW", "MEDIUM", "HIGH"], self.air_detail, self.set_detail, y)
+        y = choice("INTERFACE", ["PAPER WHITE", "DARK MODE"], 1 if self.dark else 0, self.set_dark, y)
+        self.card(x, y, w, 120)
+        p.text("SAVE", 9, th["muted"], (x + 12, y + 10), bold=True)
+        p.text("Progress autosaves every few seconds.", 11, th["text"], (x + 12, y + 28))
+        br = (x + 12, y + 52, w - 24, 24)
+        hov = self.button(br, self.reset_save)
+        armed = getattr(self, "_reset_armed", 0) > time.time()
+        p.rect(th["red"] if (hov or armed) else th["panel"], br, radius=6)
+        p.rect(th["red"], br, width=1, radius=6)
+        p.text("CLICK AGAIN TO CONFIRM" if armed else "RESET ALL PROGRESS", 10,
+               (255, 255, 255) if (hov or armed) else th["red"], (br[0] + br[2] / 2, br[1] + 12), "center", bold=True)
+        y += 130
+        u = self.updater
+        self.card(x, y, w, 104)
+        p.text("UPDATES", 9, th["muted"], (x + 12, y + 10), bold=True)
+        p.text(f"{C.APP_NAME} {C.VERSION}", 11, th["text"], (x + 12, y + 28), bold=True)
+        if u.state == "checking":
+            status = "Checking\u2026"
+        elif u.available:
+            status = f"Version {u.available['version']} is available."
+        elif u.last_result == "up_to_date":
+            status = "You're up to date."
+        elif u.last_result == "failed":
+            status = "Couldn't reach GitHub."
+        else:
+            status = "Checks automatically every few hours."
+        p.text(status, 11, th["muted"], (x + 12, y + 46))
+        br = (x + 12, y + 68, w - 24, 24)
+        if u.available:
+            hov = self.button(br, self.install_update)
+            label = "INSTALL & RESTART"
+        else:
+            hov = self.button(br, lambda: self.updater.check(user=True))
+            label = "CHECK FOR UPDATES"
+        p.rect(th["accent"] if hov else th["accent_soft"], br, radius=6)
+        p.text(label, 10, (255, 255, 255) if hov else th["accent"], (br[0] + br[2] / 2, br[1] + 12), "center",
+               bold=True)
+
+    # ------------------------------------------------------------ bottom palette
+    def draw_palette(self, r):
+        p, th, g = self.p, self.theme, self.game
+        p.rect(th["shadow"], (r.x + 2, r.y + 3, r.w, r.h), radius=12)
+        p.rect(th["panel"], r, radius=12)
+        p.rect(th["border"], r, width=1, radius=12)
+        # category tabs
+        tx = r.x + 12
+        p.rect(th["panel2"], (tx - 4, r.y + 8, 4 * 104 + 6, 24), radius=7)
+        for i, cat in enumerate(CATEGORIES):
+            br = (tx, r.y + 10, 102, 20)
+            act = i == self.category
+            hov = self.button(br, lambda i=i: self.set_category(i))
+            if act:
+                p.rect(th["accent"], br, radius=6)
+            p.text(cat, 9, (255, 255, 255) if act else (th["text"] if hov else th["muted"]),
+                   (br[0] + 51, br[1] + 10), "center", bold=True)
+            tx += 104
+        # right buttons
+        bx = r.right - 12
+        for label, key, cb, on in (("DESELECT", "RMB", self.deselect, False),
+                                    ("REMOVE", "X", self.toggle_remove, self.remove_mode),
+                                    ("ROTATE", "R", self.rotate, False)):
+            bw = p.text_w(label, 9, True) + p.text_w(key, 9) + 26
+            bx -= bw + 6
+            br = (bx, r.y + 9, bw, 22)
+            hov = self.button(br, cb)
+            p.rect(th["red"] if on else (th["border"] if hov else th["panel2"]), br, radius=6)
+            p.text(label, 9, (255, 255, 255) if on else th["text"], (br[0] + 10, br[1] + 11), "midleft", bold=True)
+            p.text(key, 9, (255, 220, 220) if on else th["muted"], (br[0] + br[2] - 9, br[1] + 11), "midright")
+
+        # cards
+        parts = by_category(CATEGORIES[self.category])
+        area = pygame.Rect(r.x + 8, r.y + 40, r.w - 16, r.h - 48)
+        cw, gap = 214, 8
+        total = len(parts) * (cw + gap) - gap
+        max_scroll = max(0, total - area.w)
+        self.palette_scroll = max(0.0, min(self.palette_scroll, max_scroll))
+        self._palette_area = area
+        self._palette_max = max_scroll
+        p.clip(area)
+        x = area.x - self.palette_scroll
+        for pdef in parts:
+            self.draw_card(pdef, pygame.Rect(int(x), area.y, cw, area.h))
+            x += cw + gap
+        p.clip(None)
+        if max_scroll > 0:
+            frac = self.palette_scroll / max_scroll
+            track = (area.x, area.bottom + 2, area.w, 3)
+            p.rect(th["border"], track, radius=2)
+            kw = area.w * area.w / total
+            p.rect(th["muted"], (area.x + (area.w - kw) * frac, area.bottom + 2, kw, 3), radius=2)
+
+    def draw_card(self, pdef, r):
+        p, th, g = self.p, self.theme, self.game
+        unlocked = g.unlocked(pdef.id)
+        sel = self.selected == pdef.id
+        hov = r.collidepoint(self.mouse) and self._palette_area.collidepoint(self.mouse)
+        if unlocked:
+            self.buttons.append((r.clip(self._palette_area), lambda pid=pdef.id: self.select_part(pid)))
+        bg = th["accent_soft"] if sel else (th["panel2"] if not hov else th["border"])
+        p.rect(bg, r, radius=10)
+        p.rect(th["accent"] if sel else th["border"], r, width=1.5 if sel else 1, radius=10)
+        icon = (r.x + 8, r.y + 10, 56, 56)
+        p.rect(th["panel"], icon, radius=6)
+        p.rect(th["border"], icon, width=1, radius=6)
+        placed = {"type": pdef.id, "rot": 0, "aim": 2, "damper": 1}
+        T = 40
+        draw_part(p, pdef, placed, icon[0] + 8, icon[1] + 8, T, th["panel"], th["outline"], theme=th)
+        tx = r.x + 72
+        tw = r.w - 80
+        fade = th["faint"]
+        p.text(pdef.name, 11, th["text"] if unlocked else fade, (tx, r.y + 9), bold=True)
+        if unlocked:
+            price = g.price(pdef.id)
+            p.text(fmt_price(price), 11, th["text"], (tx, r.y + 25), bold=True)
+            pw = p.text_w(fmt_price(price), 11, True)
+            p.text(f"{pdef.metal:g} metal", 10, th["muted"], (tx + pw + 7, r.y + 26))
+            p.text("EFFICIENCY", 7, th["muted"], (tx, r.y + 44), bold=True)
+            for i in range(5):
+                col = EFF_COLORS[pdef.efficiency] if i < pdef.efficiency else th["border"]
+                p.rect(col, (tx + 46 + i * 11, r.y + 45, 9, 4), radius=2)
+            lines = p.wrap(pdef.desc, 9, tw)
+            maxl = max(1, int((r.h - 60) // 11))
+            if len(lines) > maxl:
+                lines = lines[:maxl]
+                lines[-1] = lines[-1].rstrip(".,") + "\u2026"
+            for i, ln in enumerate(lines):
+                p.text(ln, 9, th["muted"], (tx, r.y + 57 + i * 11))
+        else:
+            if pdef.unlock == REWARDS:
+                l1, l2 = "Rewards track", "Coming in a later update"
+            else:
+                pr = project(pdef.unlock)
+                l1, l2 = f"Unlocks with Project #{pr.num}", pr.name
+            cx = tx + tw / 2 + 6
+            p.text(l1, 10, th["text"], (cx, r.y + 44), "center", bold=True)
+            p.text(l2, 9, th["muted"], (tx + tw / 2, r.y + 60), "center")
+            # padlock
+            lx, ly = cx - p.text_w(l1, 10, True) / 2 - 9, r.y + 45
+            p.rect((230, 170, 40), (lx - 5, ly - 3, 10, 8), radius=2)
+            p.rect((230, 170, 40), (lx - 3.5, ly - 8, 7, 7), width=1.6, radius=3)
+
+    def draw_hints(self, r):
+        p, th = self.p, self.theme
+        hints = [("B", "build"), ("R", "rotate"), ("T", "aim register"), ("F", "damper"), ("Q", "pick part"),
+                 ("X", "remove"), ("Z", "view"), ("Drag", "select"), ("C / V", "copy / paste"), ("WASD", "move"),
+                 ("RMB", "pan / drop"), ("Scroll", "zoom"), ("1-4", "categories"), ("Tab", "panels"),
+                 ("Cmd Z", "undo")]
+        widths = [p.text_w(k, 8, True) + 10 + p.text_w(v, 9) + 16 for k, v in hints]
+        x = r.centerx - sum(widths) / 2
+        cy = r.y + r.h / 2
+        for (k, v), w in zip(hints, widths):
+            kw = p.text_w(k, 8, True) + 8
+            p.rect(th["panel"], (x, cy - 7, kw, 14), radius=4)
+            p.rect(th["border"], (x, cy - 7, kw, 14), width=1, radius=4)
+            p.text(k, 8, th["text"], (x + kw / 2, cy), "center", bold=True)
+            p.text(v, 9, th["muted"], (x + kw + 4, cy), "midleft")
+            x += w
+
+    # ------------------------------------------------------------ tooltip / toast
+    def inspect_lines(self):
+        g = self.game
+        t = self.hover_tile
+        if not t or not self._in_plan(t) or not self.pv.view.collidepoint(self.mouse):
+            return []
+        n = g.net
+        if tuple(t) == tuple(g.plan.ahu):
+            return [("Air Handler", self.theme["text"], True),
+                    (f"Blower free air: {n.blower_free:.0f} CFM" if n else "", self.theme["text"], False),
+                    (f"Pushing: {n.ahu_flow:.0f} CFM" if n else "", self.theme["text"], False)]
+        pl = g.layout.get(tuple(t))
+        th = self.theme
+        if pl:
+            pdef = BY_ID[pl["type"]]
+            flow = n.part_flow.get(tuple(t), 0.0) if n else 0.0
+            out = [(pdef.name, th["text"], True), (f"Airflow through: {flow:.0f} CFM", th["text"], False),
+                   (f"Loss coefficient K = {n.part_k.get(tuple(t), 0):.2f}" if n else "", th["text"], False)]
+            if pdef.kind == "terminal":
+                into = next((x.cfm for x in n.terminals if x.tile == tuple(t)), 0.0) if n else 0.0
+                out[2] = (f"Into the room: {into:.0f} CFM  (T to aim)", th["text"], False)
+            if pdef.kind == "damper":
+                lvl = pl.get("damper", 0)
+                out.append((f"Damper {DAMPER_LEVELS[lvl] * 100:.0f}% open  (F to adjust)", th["text"], False))
+            if n:
+                for leak in n.leaks:
+                    if leak.tile == tuple(t) and leak.cfm >= 1:
+                        out.append((f"Open end leaking {leak.cfm:.0f} CFM! Add an End Cap.", th["red"], False))
+                if tuple(t) not in n.connected:
+                    out.append(("Not connected to the air handler.", th["red"], False))
+            return out
+        room = g.plan.room_at(*t)
+        if room >= 0:
+            cov = g.room_cov[room] if room < len(g.room_cov) else 0
+            return [(g.plan.rooms[room][0], th["text"], True), (f"Air coverage: {cov * 100:.0f}%", th["text"], False)]
+        return []
+
+    def draw_tooltip(self, view):
+        if self.drag or not view.collidepoint(self.mouse):
+            return
+        lines = [l for l in self.inspect_lines() if l[0]]
+        if not lines:
+            return
+        p, th = self.p, self.theme
+        w = max(p.text_w(t, 11, b) for t, _, b in lines) + 24
+        w = min(w, 280)
+        wrapped = []
+        for t, col, b in lines:
+            for ln in p.wrap(t, 11, w - 24, b):
+                wrapped.append((ln, col, b))
+        h = 14 + 16 * len(wrapped)
+        x, y = self.mouse[0] + 16, self.mouse[1] + 14
+        W, H = self.logical
+        if x + w > view.right:
+            x = self.mouse[0] - w - 10
+        if y + h > view.bottom:
+            y = self.mouse[1] - h - 10
+        p.rect(th["shadow"], (x + 1, y + 2, w, h), radius=8)
+        p.rect(th["tooltip"], (x, y, w, h), radius=8)
+        p.rect(th["border"], (x, y, w, h), width=1, radius=8)
+        for i, (t, col, b) in enumerate(wrapped):
+            p.text(t, 11, col, (x + 12, y + 7 + 16 * i), bold=b)
+
+    def draw_toast(self, view):
+        if not self.toast:
+            return
+        msg, until = self.toast
+        left = until - time.time()
+        if left <= 0:
+            self.toast = None
+            return
+        p = self.p
+        w = p.text_w(msg, 11, True) + 30
+        x = view.centerx - w / 2
+        y = view.y + 8
+        alpha = int(235 * min(1.0, left / 0.4))
+        p.rect((30, 32, 40, alpha), (x, y, w, 26), radius=13)
+        p.text(msg, 11, (255, 255, 255), (view.centerx, y + 13), "center", bold=True)
+
+    # ------------------------------------------------------------ commands
+    def toggle_build(self):
+        self.build_mode = not self.build_mode
+        if not self.build_mode:
+            self.deselect()
+
+    def toggle_panel(self, name):
+        self.panel = None if (name is None or self.panel == name) else name
+
+    def set_category(self, i):
+        self.category = i
+        self.palette_scroll = 0
+
+    def select_part(self, pid):
+        if not self.game.unlocked(pid):
+            return
+        if self.selected == pid:
+            self.selected = None
+            return
+        self.selected = pid
+        self.remove_mode = False
+        self.paste_mode = False
+        self.ghost_aim = None
+        self.category = CATEGORIES.index(BY_ID[pid].category)
+
+    def deselect(self):
+        self.selected = None
+        self.remove_mode = False
+        self.paste_mode = False
+        self.selection.clear()
+
+    def toggle_remove(self):
+        if self.selection:
+            self.act({"kind": "remove", "tiles": list(self.selection)})
+            self.selection.clear()
+            return
+        self.remove_mode = not self.remove_mode
+        if self.remove_mode:
+            self.selected = None
+            self.paste_mode = False
+
+    def rotate(self):
+        if self.selected:
+            self.ghost_rot = (self.ghost_rot + 1) % 4
+            if self.ghost_aim is not None:
+                self.ghost_aim = (self.ghost_aim + 2) % 8
+        elif self.paste_mode and self.clipboard:
+            self.clipboard = [((-dy, dx), dict(pl, rot=(pl["rot"] + 1) % 4,
+                                               **({"aim": (pl["aim"] + 2) % 8} if "aim" in pl else {})))
+                              for (dx, dy), pl in self.clipboard]
+        elif self.hover_tile and tuple(self.hover_tile) in self.game.layout:
+            self.act({"kind": "rotate_placed", "tile": self.hover_tile})
+
+    def aim(self):
+        if self.selected and BY_ID[self.selected].kind == "terminal":
+            pdef = BY_ID[self.selected]
+            cur = self.ghost_aim if self.ghost_aim is not None else default_aim(pdef, self.ghost_rot)
+            self.ghost_aim = (cur + 2) % 8
+        elif self.hover_tile:
+            self.act({"kind": "aim", "tile": self.hover_tile})
+
+    def damper(self):
+        if self.hover_tile:
+            self.act({"kind": "damper", "tile": self.hover_tile})
+
+    def pick(self):
+        t = self.hover_tile
+        pl = self.game.layout.get(tuple(t)) if t else None
+        if pl:
+            if self.selected != pl["type"]:
+                self.select_part(pl["type"])
+            self.ghost_rot = pl["rot"]
+            self.ghost_aim = pl.get("aim")
+
+    def copy(self):
+        if not self.selection:
+            self._toast("Drag to select parts first")
+            return
+        xs = [t[0] for t in self.selection]
+        ys = [t[1] for t in self.selection]
+        ox, oy = min(xs), min(ys)
+        self.clipboard = [((t[0] - ox, t[1] - oy), dict(self.game.layout[t]))
+                          for t in self.selection if t in self.game.layout]
+        self._toast(f"Copied {len(self.clipboard)} parts. Press V to paste.")
+
+    def paste(self):
+        if not self.clipboard:
+            self._toast("Nothing copied yet")
+            return
+        self.paste_mode = True
+        self.selected = None
+        self.remove_mode = False
+
+    def goto(self, n):
+        self.act({"kind": "goto_project", "num": n})
+        self.deselect()
+
+    def buy(self, n):
+        if self.act({"kind": "buy_project", "num": n}):
+            self._toast(f"Welcome to {project(n).name}! New parts unlocked.", 4)
+            self.deselect()
+
+    def set_detail(self, i):
+        self.air_detail = i
+        self.version += 1
+
+    def set_dark(self, i):
+        self.dark = bool(i)
+
+    def reset_save(self):
+        if getattr(self, "_reset_armed", 0) > time.time():
+            self.game.reset()
+            self.game.save()
+            self.pv.fitted_for = None
+            self.deselect()
+            self._toast("Progress reset")
+            self._reset_armed = 0
+        else:
+            self._reset_armed = time.time() + 3
+
+    # ------------------------------------------------------------ input
+    def _in_plan(self, t):
+        pl = self.game.plan
+        return t is not None and 0 <= t[0] < pl.w and 0 <= t[1] < pl.h
+
+    def smart_rot(self, pid, t):
+        """Single-port parts (registers, caps) turn to face an adjoining duct."""
+        pdef = BY_ID[pid]
+        if len(pdef.ports) != 1 or t is None:
+            return self.ghost_rot
+        g = self.game
+        base = next(iter(pdef.ports))
+
+        def connects(rot):
+            d = (base + rot) % 4
+            nb = (t[0] + DIRS[d][0], t[1] + DIRS[d][1])
+            if nb == tuple(g.plan.ahu):
+                return True
+            pl = g.layout.get(nb)
+            return bool(pl) and (d + 2) % 4 in abs_ports(BY_ID[pl["type"]], pl["rot"])
+
+        if connects(self.ghost_rot):
+            return self.ghost_rot
+        for r in range(4):
+            if connects(r):
+                return r
+        return self.ghost_rot
+
+    def place_at(self, t, drag_dir=None):
+        if not self._in_plan(t):
+            return
+        rot = self.smart_rot(self.selected, t)
+        if rot != self.ghost_rot and self.ghost_aim is not None:
+            self.ghost_aim = None
+        if self.selected in STRAIGHTS and drag_dir is not None:
+            rot = 0 if drag_dir[0] != 0 else 1
+            self.ghost_rot = rot
+        pdef = BY_ID[self.selected]
+        a = {"kind": "place", "type": self.selected, "tile": t, "rot": rot}
+        if pdef.kind == "terminal":
+            a["aim"] = self.ghost_aim if self.ghost_aim is not None else default_aim(pdef, rot)
+        self.act(a)
+
+    def handle(self, ev):
+        t = ev.type
+        if t == pygame.QUIT:
+            self.running = False
+        elif t in (getattr(pygame, "WINDOWSIZECHANGED", -1), getattr(pygame, "WINDOWRESIZED", -1),
+                   getattr(pygame, "VIDEORESIZE", -1), getattr(pygame, "WINDOWDISPLAYCHANGED", -1)):
+            self._refresh_surface()
+        elif t == pygame.MOUSEMOTION:
+            self.mouse = ev.pos
+            self.hover_tile = self.pv.tile_at(*ev.pos)
+            self.on_drag(ev)
+        elif t == pygame.MOUSEBUTTONDOWN:
+            self.mouse = ev.pos
+            self.hover_tile = self.pv.tile_at(*ev.pos)
+            if ev.button == 1:
+                self.on_left_down(ev.pos)
+            elif ev.button == 3:
+                self.drag = {"kind": "pan", "start": ev.pos, "last": ev.pos, "moved": 0.0}
+        elif t == pygame.MOUSEBUTTONUP:
+            if ev.button == 1 and self.drag and self.drag["kind"] == "select":
+                self.finish_select(ev.pos)
+            if ev.button == 3 and self.drag and self.drag["kind"] == "pan" and self.drag["moved"] < 4:
+                self.deselect()
+            if ev.button in (1, 3):
+                self.drag = None
+        elif t == pygame.MOUSEWHEEL:
+            self.on_wheel(ev)
+        elif t == pygame.KEYDOWN:
+            self.on_key(ev)
+
+    def on_left_down(self, pos):
+        for r, cb in reversed(self.buttons):
+            if r.collidepoint(pos):
+                cb()
+                return
+        rects = self.layout_rects()
+        if self.panel and rects["panel"].collidepoint(pos):
+            return
+        if self.build_mode and rects["bottom"].collidepoint(pos):
+            return
+        if not self.pv.view.collidepoint(pos) or not self.build_mode:
+            if self.pv.view.collidepoint(pos):
+                self.drag = {"kind": "pan", "start": pos, "last": pos, "moved": 10.0}
+            return
+        tile = self.pv.tile_at(*pos)
+        if self.paste_mode and self.clipboard:
+            items = [((tile[0] + dx, tile[1] + dy), pl) for (dx, dy), pl in self.clipboard]
+            self.act({"kind": "paste", "items": items})
+            return
+        if self.remove_mode:
+            self.act({"kind": "remove", "tiles": [tile]})
+            self.drag = {"kind": "remove", "last": tile}
+            return
+        if self.selected:
+            self.place_at(tile)
+            self.drag = {"kind": "place", "last": tile}
+            return
+        pl = self.game.layout.get(tuple(tile))
+        if pl and BY_ID[pl["type"]].kind == "damper":
+            self.act({"kind": "damper", "tile": tile})
+            return
+        self.selection.clear()
+        self.drag = {"kind": "select", "start": pos}
+
+    def on_drag(self, ev):
+        d = self.drag
+        if not d:
+            return
+        if d["kind"] == "pan":
+            dx, dy = ev.pos[0] - d["last"][0], ev.pos[1] - d["last"][1]
+            d["moved"] += abs(dx) + abs(dy)
+            d["last"] = ev.pos
+            self.pv.ox += dx
+            self.pv.oy += dy
+        elif d["kind"] in ("place", "remove"):
+            tile = self.pv.tile_at(*ev.pos)
+            if tile != d["last"]:
+                # fill every tile between (fast drags skip tiles)
+                lx, ly = d["last"]
+                steps = max(abs(tile[0] - lx), abs(tile[1] - ly))
+                for i in range(1, steps + 1):
+                    tx = lx + round((tile[0] - lx) * i / steps)
+                    ty = ly + round((tile[1] - ly) * i / steps)
+                    step_dir = (tx - lx, ty - ly)
+                    if d["kind"] == "place":
+                        if self.selected in STRAIGHTS:
+                            # re-orient the previous straight to the drag axis too
+                            prev = self.game.layout.get((lx, ly))
+                            want = 0 if step_dir[0] != 0 else 1
+                            if prev and prev["type"] in STRAIGHTS and prev["rot"] % 2 != want and \
+                                    d.get("count", 0) == 0:
+                                self.place_at((lx, ly), step_dir)
+                        self.place_at((tx, ty), step_dir)
+                        d["count"] = d.get("count", 0) + 1
+                    else:
+                        self.act({"kind": "remove", "tiles": [(tx, ty)]})
+                    lx, ly = tx, ty
+                d["last"] = tile
+
+    def finish_select(self, pos):
+        (ax, ay) = self.drag["start"]
+        bx, by = pos
+        if abs(bx - ax) + abs(by - ay) < 5:
+            return
+        t0 = self.pv.tile_at(min(ax, bx), min(ay, by))
+        t1 = self.pv.tile_at(max(ax, bx), max(ay, by))
+        self.selection = {t for t in self.game.layout
+                          if t0[0] <= t[0] <= t1[0] and t0[1] <= t[1] <= t1[1]}
+        if self.selection:
+            self._toast(f"{len(self.selection)} selected  •  C copy  •  X remove")
+
+    def on_wheel(self, ev):
+        rects = self.layout_rects()
+        if self.build_mode and rects["bottom"].collidepoint(self.mouse):
+            self.palette_scroll -= (ev.precise_y if hasattr(ev, "precise_y") else ev.y) * 40
+            self.palette_scroll += (ev.precise_x if hasattr(ev, "precise_x") else ev.x) * 40
+            return
+        if self.panel == "PROJECTS" and rects["panel"].collidepoint(self.mouse):
+            mx = max(0, getattr(self, "_projects_content_h", 0) - (rects["panel"].h - 64))
+            self._proj_scroll = max(0.0, min(mx, self.panel_scroll_y() - ev.precise_y * 30))
+            return
+        if self.pv.view.collidepoint(self.mouse):
+            y = ev.precise_y if hasattr(ev, "precise_y") else ev.y
+            self.pv.zoom_at(1.0 + 0.1 * max(-3, min(3, y)), *self.mouse)
+            self.version += 1
+
+    def on_key(self, ev):
+        k = ev.key
+        mods = ev.mod
+        cmd = mods & (pygame.KMOD_META | pygame.KMOD_CTRL)
+        if cmd and k == pygame.K_z:
+            if self.game.undo():
+                self.version += 1
+                self._toast("Undo")
+            return
+        if cmd and k == pygame.K_q:
+            self.running = False
+            return
+        if cmd:
+            return
+        if k == pygame.K_b:
+            self.toggle_build()
+        elif k == pygame.K_r:
+            self.rotate()
+        elif k == pygame.K_t:
+            self.aim()
+        elif k == pygame.K_f:
+            self.damper()
+        elif k == pygame.K_q:
+            self.pick()
+        elif k == pygame.K_x:
+            self.toggle_remove()
+        elif k in (pygame.K_DELETE, pygame.K_BACKSPACE):
+            if self.selection:
+                self.act({"kind": "remove", "tiles": list(self.selection)})
+                self.selection.clear()
+            elif self.hover_tile:
+                self.act({"kind": "remove", "tiles": [self.hover_tile]})
+        elif k == pygame.K_z:
+            self.view_mode = (self.view_mode + 1) % 3
+            self._toast(["Showing ducts + air", "Showing ducts only", "Showing air only"][self.view_mode])
+        elif k == pygame.K_c:
+            self.copy()
+        elif k == pygame.K_v:
+            self.paste()
+        elif k in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
+            self.set_category(k - pygame.K_1)
+        elif k == pygame.K_TAB:
+            i = PANELS.index(self.panel) + 1 if self.panel else 0
+            self.panel = PANELS[i] if i < len(PANELS) else None
+        elif k == pygame.K_ESCAPE:
+            if self.selected or self.remove_mode or self.paste_mode or self.selection:
+                self.deselect()
+            else:
+                self.panel = None
+        elif k in (pygame.K_w, pygame.K_UP):
+            self.pv.oy += 60
+        elif k in (pygame.K_s, pygame.K_DOWN):
+            self.pv.oy -= 60
+        elif k in (pygame.K_a, pygame.K_LEFT):
+            self.pv.ox += 60
+        elif k in (pygame.K_d, pygame.K_RIGHT):
+            self.pv.ox -= 60
+        elif k == pygame.K_HOME:
+            self.pv.fitted_for = None
+
+
+def main():
+    App().run()
