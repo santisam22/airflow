@@ -79,10 +79,11 @@ class RoomGrid:
             dirs = throw_dirs(pdef, pl.get("aim", 0))
             ox = (term.tile[0] + 0.5) * c
             oy = (term.tile[1] + 0.5) * c
-            q_dir = term.cfm / max(1, len(dirs))
-            v0 = min(C.VMAX, C.JET_V_PER_CFM * q_dir * pdef.exit * (1.0 + 0.15 * (len(dirs) - 1)) ** 0.5)
-            v0 *= C.TERMINAL_STRENGTH
-            L = pdef.throw * (4.5 + 0.11 * q_dir) * c / 4.0
+            # every jet of a terminal starts at the same speed, set by its power: a
+            # single-arrow register is weaker than a 4-way, slot or swirl diffuser
+            v0 = min(C.VMAX, C.JET_V_PER_CFM * term.cfm * C.JET_K * pdef.power * C.TERMINAL_STRENGTH)
+            q_eff = term.cfm * pdef.power / max(1, len(dirs)) ** C.THROW_SPLIT
+            L = pdef.throw * (C.THROW_BASE + C.THROW_PER_CFM * q_eff) * c / 4.0
             mask = self.room_masks[term.room]
             for e in dirs:
                 dx, dy = EIGHTHS[e]
@@ -112,7 +113,7 @@ class RoomGrid:
                 base += self.room_masks[room] * min(0.07, 0.0012 * per)
         f = np.maximum(f, base)
         spread = self.diffuse(f, 10 * c)
-        f = np.maximum(f, spread * 1.35)
+        f = np.maximum(f, spread * C.SPREAD_GAIN)
         self.speed = np.clip(f, 0.0, C.VMAX)
         return self.speed
 

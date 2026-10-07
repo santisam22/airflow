@@ -1,1 +1,1 @@
-Air now keeps flowing straight through junctions, and registers and diffusers blow more gently.
+New airflow: the unit's air is shared between its connected sides and flows like water to every outlet, junctions only cost air when it goes through them, fans win back lost air, and you can now see the air moving.

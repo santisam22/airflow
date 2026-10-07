@@ -96,14 +96,13 @@ What the UI shows:
 - Duct segments that aren't connected to the AHU are drawn **solid dark blue** (no flow).
 - Placing a part previews a ghost outline; invalid placements tint red.
 
-### Proposed model *(inferred, to be tuned until it looks/feels like the original)*
-1. **Duct network = graph.** Nodes are part ports; edges are parts with resistance `R = K_total × friction_multiplier / A²`.
-2. **Blower curve:** `ΔP(Q) = P_max × (1 − (Q / Q_free)²)`, with `Q_free = 415 CFM × (1 + 0.10 × blower_level)`.
-3. Solve flows with an iterative pressure solve (Hardy-Cross style, or a small linear system each tick). Splits at tees are weighted by the downstream resistance plus the tee's branch K (square T sends less air to the branch than a tapered takeoff).
-4. **Open ends** are terminals with very low resistance into "attic" (counted as leakage). **End caps** close the node.
-5. **Registers/diffusers** are terminals with their own K. They inject their CFM into the room grid at the register tile, in their aim direction(s).
-6. **Room air field:** a per-tile 2D velocity field. Each terminal emits a jet with throw length proportional to its exit velocity. Spread it with a few diffusion/advection passes that walls block. Doorway gaps let air into neighboring rooms (the video shows heat bleeding into adjacent rooms). Display it as the smooth heatmap.
-7. **Room coverage %** = share of a room's floor tiles whose speed is above a threshold (≈0.1 m/s), possibly weighted. Project coverage = area-weighted average across rooms.
+### Airflow model (since 0.4.0: air flows like water)
+1. **The unit always moves its full airflow** (415 CFM, +10% per Blower Motor level). It is split equally between the sides of the unit that lead somewhere: one side 100%, two sides 50% each, and so on.
+2. **Air is shared by destination.** Every outlet (a register, or an open end leaking into the attic) gets an equal share. At each junction the flow divides by how many outlets lie beyond each arm. An arm that leads nowhere (capped, or a dead end) takes nothing, so a junction costs nothing unless air goes through it. A damper shrinks its branch's share.
+3. **Travel costs a little:** 0.6% per tile (2.4% in flex), plus a loss for each fitting's path from its loss coefficient K: `loss = 1 − exp(−(0.06·K + travel))`. Going straight through a tee or cross costs the same as a straight duct; turning into a branch costs K ≈ 1. Smooth Duct Liner cuts all losses by 5% per level.
+4. **Inline booster fans** (pushing the way the arrow points) put back 15% of the air lost upstream of them.
+5. **Terminals blow by power:** single-arrow registers are weakest, 2-way and corner diffusers are stronger, and 4-way, linear slot and swirl diffusers are strongest. Room coverage comes from the jets plus drift through the room; walls block it and doorways let it through.
+6. **Movement:** particles flow through the ducts and puff out of registers; the room glow pulses outward from each register.
 
 ---
 

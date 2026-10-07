@@ -263,6 +263,7 @@ class FlowAnimator:
             near = np.where(closer, d, near)
             start = np.where(closer, arrive, start)
         near = np.where(near > 1e8, 0.0, near)
+        self.room_near = near
         self.room_tau = ROOM_TAU_UP + ROOM_TAU_PER_TILE * near
         self.room_start = t + start
 
@@ -320,6 +321,10 @@ class FlowAnimator:
         duct[..., 3] = np.where(g.mask & ~g.edge, 255, 0).astype(np.uint8)
 
         wob = 1.0 + 0.14 * (self.room_n1 * np.sin(0.8 * t) + self.room_n2 * np.cos(0.6 * t + 1.0))
+        # waves of air rolling outward from every register, so the room is never still
+        near = getattr(self, "room_near", None)
+        if near is not None and near.shape == wob.shape:
+            wob = wob * (1.0 + 0.13 * np.sin(2 * np.pi * (near / 1.4 - 0.75 * t) + 2.0 * self.room_n2))
         heat = heat_rgba(np.clip(self.room * wob, 0.0, C.VMAX))
         self._frame = (np.ascontiguousarray(duct), np.ascontiguousarray(heat), t)
         self._frame_at = t

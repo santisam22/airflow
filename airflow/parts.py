@@ -41,6 +41,7 @@ class PartDef:
     throw: float = 1.0    # throw length factor
     exit: float = 1.0     # face velocity factor
     wide: bool = False
+    power: float = 1.0    # how hard a terminal blows into the room (4-way diffuser = 1.0)
     shape: str = ""       # drawing hint
 
 
@@ -104,30 +105,30 @@ PARTS = [
     _p(id="bareboot", name="Bare Boot", category="TRANSITION", price=0, metal=0.5, efficiency=1,
        desc="For the not-so bright individuals.",
        ports={W: 0.05}, kind="terminal", sink_k=0.6, throws=(0, 2, 4, 6), throw=0.3, exit=0.45,
-       shape="boot"),
+       shape="boot", power=0.28),
     _p(id="regboot", name="Register Boot", category="TRANSITION", price=8, metal=1, efficiency=1,
        desc="Basic boot + 1-way register. Cheap, but it lets less air through and throws it short. Press T to aim.",
-       ports={W: 0.05}, kind="terminal", sink_k=1.6, throws=(0,), throw=0.8, exit=1.0),
+       ports={W: 0.05}, kind="terminal", sink_k=1.6, throws=(0,), throw=0.8, exit=1.0, power=0.6),
     _p(id="angleboot", name="Angled Register Boot", category="TRANSITION", price=12, metal=1, efficiency=2,
        desc="Boot whose register throws air at a 45° angle. Aim it into corners. Press T to aim.",
-       ports={W: 0.05}, kind="terminal", sink_k=1.4, throws=(1,), throw=1.0, exit=1.0),
+       ports={W: 0.05}, kind="terminal", sink_k=1.4, throws=(1,), throw=1.0, exit=1.0, power=0.65),
     _p(id="reg2", name="2-Way Register", category="TRANSITION", price=18, metal=1.5, efficiency=3,
        desc="Throws air in two opposite directions. Press T to aim.",
-       ports={W: 0.05}, kind="terminal", sink_k=1.2, throws=(0, 4), throw=0.9, exit=1.0, unlock=2),
+       ports={W: 0.05}, kind="terminal", sink_k=1.2, throws=(0, 4), throw=0.9, exit=1.0, unlock=2, power=0.85),
     _p(id="corner", name="Corner Diffuser", category="TRANSITION", price=26, metal=1.5, efficiency=3,
        desc="2-way diffuser with its exits 90° apart. Great tucked into a room corner. Press T to aim.",
-       ports={W: 0.05}, kind="terminal", sink_k=1.2, throws=(0, 2), throw=0.95, exit=1.0, unlock=2),
+       ports={W: 0.05}, kind="terminal", sink_k=1.2, throws=(0, 2), throw=0.95, exit=1.0, unlock=2, power=0.85),
     _p(id="diff4", name="4-Way Ceiling Diffuser", category="TRANSITION", price=30, metal=2, efficiency=3,
        desc="Square louvered diffuser. Spreads air evenly in all four directions.",
-       ports={W: 0.05}, kind="terminal", sink_k=1.0, throws=(0, 2, 4, 6), throw=0.8, exit=0.9),
+       ports={W: 0.05}, kind="terminal", sink_k=1.0, throws=(0, 2, 4, 6), throw=0.8, exit=0.9, power=1.0),
     _p(id="slot", name="Linear Slot Diffuser", category="TRANSITION", price=52, metal=2, efficiency=4,
        desc="Long narrow slot. Throws a wide, far-reaching sheet of air. Press T to aim.",
-       ports={W: 0.05}, kind="terminal", sink_k=1.0, throws=(0,), throw=1.4, exit=1.0, wide=True,
-       unlock=3),
+       ports={W: 0.05}, kind="terminal", sink_k=1.0, throws=(0,), throw=1.7, exit=1.0, wide=True,
+       unlock=3, power=1.45),
     _p(id="swirl", name="Swirl Diffuser", category="TRANSITION", price=140, metal=2.5, efficiency=5,
        desc="Spins air out in every direction for fast, even mixing.",
        ports={W: 0.05}, kind="terminal", sink_k=0.9, throws=(0, 1, 2, 3, 4, 5, 6, 7), throw=0.85,
-       exit=0.8, unlock=4),
+       exit=0.8, unlock=4, power=1.15),
 ]
 
 BY_ID = {p.id: p for p in PARTS}

@@ -20,6 +20,7 @@ from .state import UPGRADES, ActionError, Game, upgrade_cost
 from .updater import Updater, whats_new_after_update
 from .anim import DETAIL_CELLS, DETAIL_HZ, FlowAnimator
 from .home import HomeMixin
+from .particles import Particles
 
 TOP_H = 66
 TABS_H = 30
@@ -77,6 +78,7 @@ class App(HomeMixin):
         self.running = True
         self.updater = Updater()
         self.anim = FlowAnimator()
+        self.particles = Particles()
         self.t = 0.0                  # animation clock (seconds)
         self._anim_dirty = True
         self.load_settings()
@@ -218,8 +220,10 @@ class App(HomeMixin):
         if was_dirty or self._anim_dirty or self.anim.plan_num != self.game.current:
             if self.game.net is not None:
                 self.anim.on_sim(self.game, self.t, self.air_detail)
+                self.particles.on_sim(self.game.plan, self.game.layout, self.game.net)
                 self._anim_dirty = False
         self.anim.update(self.t, min(dt, 0.1), self.game.grid())
+        self.particles.update(min(dt, 0.05), self.air_detail)
         if time.time() - self.last_save > C.AUTOSAVE_SECONDS:
             try:
                 self.game.save()
@@ -269,7 +273,8 @@ class App(HomeMixin):
         show_ducts = self.view_mode in (0, 1)
         frame = self.anim.frame(self.t, DETAIL_HZ[self.air_detail])
         draw_plan(p, th, self.game, self.pv, show_heat, show_ducts, self.version, anim_frame=frame,
-                  duct_cells=DETAIL_CELLS[self.air_detail], room_cov=self.disp_rooms)
+                  duct_cells=DETAIL_CELLS[self.air_detail], room_cov=self.disp_rooms,
+                  particles=self.particles)
         if ui:
             self.draw_overlays(view)
         self.draw_legend(view)
@@ -460,10 +465,14 @@ class App(HomeMixin):
                 (f"Blower (free air): {n.blower_free:.0f} CFM", th["text"]),
                 (f"Moving through ducts: {n.ahu_flow:.0f} CFM", th["text"]),
                 (f"Delivered to rooms: {n.delivered:.0f} CFM", th["text"]),
-                (f"Static pressure: {n.static_pct:.0f}% of blower max", th["text"]),
+                (f"Sides of the unit in use: {n.outlets} ({100 / n.outlets:.0f}% each)" if n.outlets
+                 else "Sides of the unit in use: 0", th["text"]),
+                (f"Lost along the ducts: {n.lost:.0f} CFM ({n.static_pct:.0f}%)", th["text"]),
                 (f"Registers connected: {sum(1 for t in n.terminals if t.cfm > 0.5)}", th["text"]),
                 (f"Average room air speed: {self.disp_avg:.2f} m/s", th["text"]),
             ]
+            if n.boosted > 0.5:
+                lines.append((f"Won back by fans: {n.boosted:.0f} CFM", th["green"]))
             if n.leaked > 0.5:
                 lines.append((f"Leaking into attic: {n.leaked:.0f} CFM", th["red"]))
         hh = 30 + 17 * len(lines)

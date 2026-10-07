@@ -258,7 +258,7 @@ class PlanView:
 
 
 def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0, anim_frame=None,
-              duct_cells=None, room_cov=None):
+              duct_cells=None, room_cov=None, particles=None):
     plan = game.plan
     T = pv.T
     x0, y0 = pv.origin()
@@ -324,6 +324,9 @@ def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0, an
     ow = wall_w * 1.3
     p.rect(theme["wall"], (x0 - ow / 2, y0 - ow / 2, W + ow, H + ow), width=ow)
 
+    if show_heat and particles is not None:
+        particles.draw_room(p, pv)
+
     # ducts
     net = game.net
     if show_ducts:
@@ -336,6 +339,8 @@ def draw_plan(p, theme, game, pv, show_heat=True, show_ducts=True, version=0, an
         if anim_frame is not None:
             img = pv.layer("duct", anim_frame[0], ("d", anim_frame[2]), p.s, duct_cells)
             p.blit(img, (x0, y0))
+            if particles is not None:
+                particles.draw_duct(p, pv)
             ahu = tuple(plan.ahu)
             for (pdef, pl, (tx, ty), fill, flow), t in zip(items, game.layout.keys()):
                 joined = []

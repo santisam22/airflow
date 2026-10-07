@@ -17,6 +17,7 @@ mkdir -p "$BUILD/icon/Airflow.iconset" "$DIST"
 echo "→ Building Airflow $VERSION"
 
 echo "→ Running play tests…"
+$PY tests/test_flow.py
 $PY tests/test_play.py
 
 echo "→ Drawing icon…"

@@ -4,7 +4,7 @@ import os
 import sys
 
 APP_NAME = "Airflow"
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 
 GITHUB_REPO = "santisam22/airflow"
 WEBSITE = "https://santisam22.github.io/airflow/"
@@ -30,6 +30,11 @@ VMAX = 2.0
 # Room air
 JET_V_PER_CFM = 0.026    # jet start speed (m/s) per CFM leaving a register face
 TERMINAL_STRENGTH = 0.6  # how hard registers and diffusers blow (1.0 = the strength in 0.2-0.3)
+JET_K = 0.4              # terminal jet speed per CFM (times its power)
+THROW_BASE = 4.5         # jet reach, in room cells, plus...
+THROW_PER_CFM = 0.13     # ...this per effective CFM in each jet
+THROW_SPLIT = 0.5        # how much splitting air between more jets shortens each one
+SPREAD_GAIN = 1.35       # how far air drifts through a room after leaving the jets
 COVER_LO = 0.03          # below this speed a cell contributes 0 coverage (scaled with TERMINAL_STRENGTH)
 COVER_HI = 0.15          # at/above this speed a cell is fully covered
 
