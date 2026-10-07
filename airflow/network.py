@@ -11,6 +11,8 @@ Air is treated like water poured into the ducts, not like a pressure system:
   arm. An arm that leads nowhere (capped, or a dead end) takes nothing, so a
   junction costs nothing unless air actually goes through it. A volume damper
   shrinks its branch's share and the rest goes elsewhere.
+* Open ends leak into the attic, except the unused arms of a junction (tee,
+  cross, tapered or Y-branch): those count as capped.
 * Travel costs a little: every tile loses a small fraction to friction, and
   each fitting loses more for the path the air takes through it (straight
   through a tee is cheap, turning into its branch is not). Losses come from the
@@ -37,6 +39,8 @@ JUNCTION_K = {
     "tee": (STRAIGHT_K, 1.0, 0.75),
     "cross": (STRAIGHT_K, 1.15, 0.9),
 }
+
+JUNCTION_KINDS = ("tee", "tapered")   # T-Branch, 4-Way Cross, Y-Branch, Tapered Branches
 
 LOSS_PER_K = 0.06        # fraction lost per unit of loss coefficient along a path
 TRAVEL_LOSS = 0.006      # fraction lost per tile travelled (x4 in flex duct)
@@ -156,8 +160,8 @@ def solve(plan, layout, blower_level=0, liner_level=0):
         pdef = BY_ID[pl["type"]]
         if pdef.kind == "terminal":
             sinks[t].append(("room", None))
-        if pdef.kind == "cap":
-            continue
+        if pdef.kind == "cap" or pdef.kind in JUNCTION_KINDS:
+            continue    # an unused arm on a junction is treated as capped
         for d in ports(t):
             if d == inflow[t] or neighbour(t, d) is not None:
                 continue
@@ -170,7 +174,7 @@ def solve(plan, layout, blower_level=0, liner_level=0):
         if t in parent:
             continue
         for d in ports(t):
-            if neighbour(t, d) is None and BY_ID[pl["type"]].kind != "cap":
+            if neighbour(t, d) is None and BY_ID[pl["type"]].kind not in ("cap",) + JUNCTION_KINDS:
                 res.open_ports.setdefault(t, []).append(d)
 
     # --- demand: how many outlets lie beyond each part (dampers shrink it)

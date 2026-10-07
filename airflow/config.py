@@ -4,7 +4,7 @@ import os
 import sys
 
 APP_NAME = "Airflow"
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 GITHUB_REPO = "santisam22/airflow"
 WEBSITE = "https://santisam22.github.io/airflow/"
@@ -17,7 +17,7 @@ CELLS = 4            # room-air simulation cells per tile edge
 
 # Airflow physics (arbitrary but self-consistent units)
 PMAX = 100.0             # blower shutoff pressure; static pressure % is P / PMAX
-BASE_FREE_CFM = 415.0    # blower free-air delivery at Blower Motor level 0
+BASE_FREE_CFM = 290.0    # blower airflow at Blower Motor level 0 (was 415 before 0.4.1)
 KSCALE = 3.0e-4          # resistance per unit loss coefficient K
 OPEN_END_K = 1.0         # an open duct end dumping into the attic
 AHU_PORT_K = 0.05
@@ -29,14 +29,14 @@ VMAX = 2.0
 
 # Room air
 JET_V_PER_CFM = 0.026    # jet start speed (m/s) per CFM leaving a register face
-TERMINAL_STRENGTH = 0.6  # how hard registers and diffusers blow (1.0 = the strength in 0.2-0.3)
+TERMINAL_STRENGTH = 0.42 # how hard registers and diffusers blow (1.0 = the strength in 0.2-0.3)
 JET_K = 0.4              # terminal jet speed per CFM (times its power)
 THROW_BASE = 4.5         # jet reach, in room cells, plus...
 THROW_PER_CFM = 0.13     # ...this per effective CFM in each jet
 THROW_SPLIT = 0.5        # how much splitting air between more jets shortens each one
 SPREAD_GAIN = 1.35       # how far air drifts through a room after leaving the jets
-COVER_LO = 0.03          # below this speed a cell contributes 0 coverage (scaled with TERMINAL_STRENGTH)
-COVER_HI = 0.15          # at/above this speed a cell is fully covered
+COVER_LO = 0.021         # below this speed a cell contributes 0 coverage (scaled with TERMINAL_STRENGTH)
+COVER_HI = 0.105         # at/above this speed a cell is fully covered
 
 STARTING_MONEY = 150.0
 BASE_PAY = 20.0          # project 1 pay; part prices scale by pay / BASE_PAY

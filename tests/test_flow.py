@@ -71,11 +71,16 @@ def main():
     assert n.delivered > before
     assert abs(n.boosted - 0.15 * lost_upstream) < 0.5, (n.boosted, lost_upstream)
 
-    # 5. open ends are outlets too: the air leaks into the attic
+    # 5. open duct ends leak into the attic, but a junction's unused arm acts capped
     g = game()
     place(g, "galv", 1, 4); place(g, "tee", 2, 4, 0); place(g, "regboot", 3, 4, 0)
     g.simulate(); n = g.net
-    assert n.leaked > 100 and n.delivered > 100
+    assert n.leaked == 0 and not n.leaks and abs(n.delivered - straight_run(game(), False).delivered) < 30
+    g = game()
+    place(g, "galv", 1, 4); place(g, "tee", 2, 4, 0); place(g, "regboot", 3, 4, 0); place(g, "galv", 2, 5, 1)
+    g.simulate(); n = g.net
+    assert n.leaked > 50 and n.delivered > 50, (n.leaked, n.delivered)   # a duct stub off the arm does leak
+    assert abs(n.blower_free - 290.0) < 1e-6
 
     # 6. single-arrow registers are weaker than multi-way and premium diffusers
     def coverage(pid):

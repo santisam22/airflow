@@ -1,1 +1,1 @@
-New airflow: the unit's air is shared between its connected sides and flows like water to every outlet, junctions only cost air when it goes through them, fans win back lost air, and you can now see the air moving.
+A gentler air handler and diffusers, and unused junction arms now act as if capped.
