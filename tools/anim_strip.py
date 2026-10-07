@@ -60,6 +60,7 @@ def main():
     app = App(headless=(1400, 860))
     app.game = Game()
     app.toast = None
+    app.screen = "game"
     app.panel = None
     app.update(1 / FPS)
     app.draw()

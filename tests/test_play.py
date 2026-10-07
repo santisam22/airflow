@@ -43,6 +43,18 @@ def main():
     app.game = Game(); app.toast = None
     frame(app)
     g = app.game
+    # every launch opens on the home screen; PLAY enters the game
+    assert app.screen == "home"
+    click(app, find_button(app, lambda r, cb: cb == app.play))
+    assert app.screen == "game"
+    # Esc with nothing selected goes back home; Enter plays again
+    key(app, pygame.K_ESCAPE); assert app.screen == "home"
+    click(app, find_button(app, lambda r, cb: getattr(cb, "__name__", "") == "<lambda>" and r.w > 200 and r.y < 500
+                           and r.y > app.logical[1] / 2 - 100))
+    assert app.home_page == "settings", app.home_page
+    key(app, pygame.K_ESCAPE); assert app.home_page == "main"
+    key(app, pygame.K_RETURN); assert app.screen == "game"
+    app.toast = None; frame(app)
     # select Galvanized Duct by clicking its card
     card = app._palette_area.x + 50, app._palette_area.y + 40
     click(app, card)
@@ -134,6 +146,22 @@ def main():
     for _ in range(3):
         key(app, pygame.K_z)
     app.dark = True; frame(app)
+    # updates: download is manual, from the home screen; finishing shows the banner
+    u = app.updater
+    u.available = {"version": "9.9.9", "url": "x", "signature": "x", "notes": "Test notes"}
+    app.go_home(); frame(app)
+    btn = find_button(app, lambda r, cb: cb == app.start_download)
+    started = []
+    u.download = lambda: started.append(1)
+    click(app, btn)
+    assert started, "DOWNLOAD UPDATE should start the download"
+    u.state, u.progress = "downloading", 0.4; frame(app)
+    u.state, u.downloaded_version = "downloaded", "9.9.9"
+    frame(app)
+    assert app.banner and app.banner[0] == "Update 9.9.9 downloaded", app.banner
+    find_button(app, lambda r, cb: cb == app.restart_to_update)
+    frame(app)
+    assert app.banner[0] == "Update 9.9.9 downloaded"   # announced once, not re-triggered
     print("all play tests passed")
 
 

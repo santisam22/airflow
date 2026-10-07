@@ -1,5 +1,6 @@
 """Window, UI panels and input handling."""
 
+import json
 import math
 import os
 import sys
@@ -18,6 +19,7 @@ from .roomair import colormap, speed_to_t
 from .state import UPGRADES, ActionError, Game, upgrade_cost
 from .updater import Updater, whats_new_after_update
 from .anim import DETAIL_CELLS, DETAIL_HZ, FlowAnimator
+from .home import HomeMixin
 
 TOP_H = 66
 TABS_H = 30
@@ -31,7 +33,7 @@ PANELS = ["STATS", "UPGRADES", "PROJECTS", "APPEARANCE"]
 STRAIGHTS = {"galv", "flex"}
 
 
-class App:
+class App(HomeMixin):
     def __init__(self, headless=False):
         pygame.init()
         pygame.key.set_repeat(0)
@@ -77,12 +79,32 @@ class App:
         self.anim = FlowAnimator()
         self.t = 0.0                  # animation clock (seconds)
         self._anim_dirty = True
-        self.update_dismissed = False
-        self._toast("Pick a part below, then click the plan to place it. Connect ducts from the AHU into rooms!", 6)
+        self.load_settings()
+        self.init_home()
         news = whats_new_after_update()
         if news:
             v, notes = news
-            self._toast(f"Updated to Airflow {v}" + (f": {notes}" if notes else ""), 8)
+            self.show_banner(f"Updated to Airflow {v}", notes)
+
+    # ------------------------------------------------------------ settings file
+    def _settings_path(self):
+        return os.path.join(os.path.dirname(C.save_path()), "settings.json")   # next to the save
+
+    def load_settings(self):
+        try:
+            with open(self._settings_path()) as fh:
+                d = json.load(fh)
+            self.dark = bool(d.get("dark", False))
+            self.air_detail = max(0, min(2, int(d.get("air_detail", 1))))
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def save_settings(self):
+        try:
+            with open(self._settings_path(), "w") as fh:
+                json.dump({"dark": self.dark, "air_detail": self.air_detail}, fh)
+        except OSError:
+            pass
 
     # ------------------------------------------------------------ window
     def _open_window(self):
@@ -177,6 +199,9 @@ class App:
                 pygame.image.save(self.surf, smoke)
                 self.running = False
         self.game.save()
+        self.save_settings()
+        if self.updater.staged:
+            self.updater.apply(relaunch=False)   # installs once the game has exited
         pygame.quit()
 
     def update(self, dt):
@@ -184,6 +209,7 @@ class App:
             self.updater.tick()
             if self.updater.ready_to_quit:
                 self.running = False
+        self.watch_updates()
         was_dirty = self.game.dirty
         self.game.tick(min(dt, 0.25))
         self.t += min(dt, 0.1)
@@ -216,9 +242,17 @@ class App:
 
     # ------------------------------------------------------------ drawing
     def draw(self):
+        self.p.theme = self.theme
+        self.buttons = []
+        if self.screen == "home":
+            self.draw_home()
+        else:
+            self.draw_game()
+        self.draw_banner()
+
+    def draw_game(self, ui=True):
         th = self.theme
         self.p.theme = th
-        self.buttons = []
         p = self.p
         W, H = self.logical
         rects = self.layout_rects()
@@ -236,7 +270,8 @@ class App:
         frame = self.anim.frame(self.t, DETAIL_HZ[self.air_detail])
         draw_plan(p, th, self.game, self.pv, show_heat, show_ducts, self.version, anim_frame=frame,
                   duct_cells=DETAIL_CELLS[self.air_detail], room_cov=self.disp_rooms)
-        self.draw_overlays(view)
+        if ui:
+            self.draw_overlays(view)
         self.draw_legend(view)
         self.draw_topbar()
         if self.panel:
@@ -244,60 +279,9 @@ class App:
         if self.build_mode:
             self.draw_palette(rects["bottom"])
         self.draw_hints(rects["hints"])
-        self.draw_tooltip(view)
-        self.draw_toast(view)
-        self.draw_update_banner()
-
-    def draw_update_banner(self):
-        u = self.updater
-        info = u.available
-        busy = u.state in ("downloading", "restarting")
-        if u.state == "error":
-            msg, col = u.message, self.theme["red"]
-        elif busy:
-            msg, col = u.message, self.theme["accent"]
-        elif info and not self.update_dismissed:
-            notes = info.get("notes") or ""
-            msg = f"Airflow {info['version']} is available" + (f"  \u2022  {notes}" if notes else "")
-            col = self.theme["accent"]
-        else:
-            return
-        p = self.p
-        W, _ = self.logical
-        msg_w = min(p.text_w(msg, 11, True), W * 0.38)
-        lines = p.wrap(msg, 11, msg_w + 1, True)[:1]
-        msg = lines[0] if lines else msg
-        btn = "INSTALL & RESTART" if (info and u.state == "idle") else ("TRY AGAIN" if (u.state == "error" and info) else "")
-        bw = p.text_w(btn, 10, True) + 22 if btn else 0
-        w = p.text_w(msg, 11, True) + 30 + (bw + 8 if btn else 0) + (22 if not busy else 0)
-        x = W / 2 - w / 2
-        y = TOP_H + 4
-        p.rect(col, (x, y, w, 24), radius=12)
-        p.text(msg, 11, (255, 255, 255), (x + 14, y + 12), "midleft", bold=True)
-        bx = x + 14 + p.text_w(msg, 11, True) + 10
-        if btn:
-            r = (bx, y + 3, bw, 18)
-            hov = self.button(r, self.install_update)
-            p.rect((255, 255, 255) if hov else (235, 240, 255), r, radius=9)
-            p.text(btn, 10, col, (bx + bw / 2, y + 12), "center", bold=True)
-            bx += bw + 6
-        if not busy:
-            r = (bx, y + 3, 18, 18)
-            self.button(r, self.dismiss_update)
-            p.text("\u00d7", 14, (255, 255, 255), (bx + 9, y + 11), "center")
-
-    def install_update(self):
-        if self.updater.state == "error":
-            self.updater.state = "idle"
-        self.game.save()
-        self.updater.install()
-
-    def dismiss_update(self):
-        if self.updater.state == "error":
-            self.updater.state = "idle"
-            self.updater.message = ""
-        else:
-            self.update_dismissed = True
+        if ui:
+            self.draw_tooltip(view)
+            self.draw_toast(view)
 
     def draw_overlays(self, view):
         p, th, pv, g = self.p, self.theme, self.pv, self.game
@@ -389,6 +373,18 @@ class App:
         p.rect(th["accent"] if self.build_mode else th["green"], (bx, by, bw, 22), radius=6)
         p.text(label, 10, (255, 255, 255), (bx + 12, by + 11), "midleft", bold=True)
         p.text("B", 10, (210, 220, 255), (bx + bw - 12, by + 11), "midright", bold=True)
+        # back to the home screen (a dot means an update is waiting there)
+        mx = bx + bw + 8
+        mw = p.text_w("MENU", 10, True) + p.text_w("ESC", 9) + 34
+        hov = self.button((mx, by, mw, 22), self.go_home)
+        p.rect(th["border"] if hov else th["panel2"], (mx, by, mw, 22), radius=6)
+        p.rect(th["border"], (mx, by, mw, 22), width=1, radius=6)
+        p.text("MENU", 10, th["text"], (mx + 12, by + 11), "midleft", bold=True)
+        p.text("ESC", 9, th["muted"], (mx + mw - 12, by + 11), "midright")
+        u = self.updater
+        if u.available or u.state == "downloaded":
+            p.circle(th["panel"], (mx + mw - 1, by + 1), 6)
+            p.circle(th["green"] if u.state == "downloaded" else th["red"], (mx + mw - 1, by + 1), 4.5)
 
         # stats
         stats = [
@@ -636,6 +632,8 @@ class App:
         p.text(f"{C.APP_NAME} {C.VERSION}", 11, th["text"], (x + 12, y + 28), bold=True)
         if u.state == "checking":
             status = "Checking\u2026"
+        elif u.state == "downloaded":
+            status = f"Version {u.downloaded_version} is downloaded."
         elif u.available:
             status = f"Version {u.available['version']} is available."
         elif u.last_result == "up_to_date":
@@ -646,9 +644,12 @@ class App:
             status = "Checks automatically every few hours."
         p.text(status, 11, th["muted"], (x + 12, y + 46))
         br = (x + 12, y + 68, w - 24, 24)
-        if u.available:
-            hov = self.button(br, self.install_update)
-            label = "INSTALL & RESTART"
+        if u.state == "downloaded":
+            hov = self.button(br, self.restart_to_update)
+            label = "RESTART TO INSTALL"
+        elif u.available:
+            hov = self.button(br, self.go_home)
+            label = "DOWNLOAD ON THE HOME SCREEN"
         else:
             hov = self.button(br, lambda: self.updater.check(user=True))
             label = "CHECK FOR UPDATES"
@@ -962,9 +963,11 @@ class App:
         self.air_detail = i
         self.version += 1
         self._anim_dirty = True
+        self.save_settings()
 
     def set_dark(self, i):
         self.dark = bool(i)
+        self.save_settings()
 
     def reset_save(self):
         if getattr(self, "_reset_armed", 0) > time.time():
@@ -1055,6 +1058,8 @@ class App:
             if r.collidepoint(pos):
                 cb()
                 return
+        if self.screen != "game":
+            return
         rects = self.layout_rects()
         if self.panel and rects["panel"].collidepoint(pos):
             return
@@ -1086,7 +1091,7 @@ class App:
 
     def on_drag(self, ev):
         d = self.drag
-        if not d:
+        if not d or self.screen != "game":
             return
         if d["kind"] == "pan":
             dx, dy = ev.pos[0] - d["last"][0], ev.pos[1] - d["last"][1]
@@ -1132,6 +1137,8 @@ class App:
             self._toast(f"{len(self.selection)} selected  •  C copy  •  X remove")
 
     def on_wheel(self, ev):
+        if self.screen != "game":
+            return
         rects = self.layout_rects()
         if self.build_mode and rects["bottom"].collidepoint(self.mouse):
             self.palette_scroll -= (ev.precise_y if hasattr(ev, "precise_y") else ev.y) * 40
@@ -1154,6 +1161,9 @@ class App:
             if self.game.undo():
                 self.version += 1
                 self._toast("Undo")
+            return
+        if self.screen != "game":
+            self.home_key(k, cmd)
             return
         if cmd and k == pygame.K_q:
             self.running = False
@@ -1194,7 +1204,7 @@ class App:
             if self.selected or self.remove_mode or self.paste_mode or self.selection:
                 self.deselect()
             else:
-                self.panel = None
+                self.go_home()
         elif k in (pygame.K_w, pygame.K_UP):
             self.pv.oy += 60
         elif k in (pygame.K_s, pygame.K_DOWN):

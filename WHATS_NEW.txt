@@ -1,1 +1,1 @@
-Animated airflow: air now travels down your ducts, fades along long runs, and rooms fill up over time.
+New home screen with Play, Settings and How to play. Updates now download when you choose, right from the home screen.

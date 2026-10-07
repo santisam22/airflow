@@ -67,6 +67,9 @@ class Updater:
         self.last_result = None      # "up_to_date" | "available" | "failed"
         self._lock = threading.Lock()
         self.ready_to_quit = False
+        self.progress = 0.0
+        self.staged = None             # (current app, new app, work dir) once downloaded
+        self.downloaded_version = None
 
     # ------------------------------------------------------------ checking
     def tick(self):
@@ -105,9 +108,11 @@ class Updater:
             if user:
                 self.message = "Couldn't check for updates. Check your internet connection and try again."
 
-    # ------------------------------------------------------------ installing
-    def install(self):
-        if not self.available or self.state in ("downloading", "restarting"):
+    # ------------------------------------------------------------ downloading
+    # The player starts the download from the home screen. A verified download is
+    # staged; it replaces the app when the player restarts (or quits) the game.
+    def download(self):
+        if not self.available or self.state in ("downloading", "downloaded", "restarting"):
             return
         app = app_bundle()
         if app is None:
@@ -118,14 +123,15 @@ class Updater:
         if not os.access(folder, os.W_OK):
             return self._error(f"Airflow can't replace itself in {folder}. Download the update from the website instead.")
         self.state = "downloading"
+        self.progress = 0.0
         self.message = f"Downloading Airflow {self.available['version']}…"
-        threading.Thread(target=self._install, args=(dict(self.available), app), daemon=True).start()
+        threading.Thread(target=self._download, args=(dict(self.available), app), daemon=True).start()
 
     def _error(self, msg):
         self.state = "error"
         self.message = msg
 
-    def _install(self, info, app):
+    def _download(self, info, app):
         try:
             work = os.path.join(tempfile.gettempdir(), f"airflow-update-{uuid.uuid4().hex}")
             os.makedirs(work)
@@ -134,7 +140,16 @@ class Updater:
             with urllib.request.urlopen(req, timeout=120, context=_ssl_context()) as r, open(zpath, "wb") as fh:
                 if r.status != 200:
                     raise RuntimeError("The download failed. Check your internet connection and try again.")
-                shutil.copyfileobj(r, fh, 1 << 20)
+                total = int(r.headers.get("Content-Length") or 0)
+                got = 0
+                while True:
+                    b = r.read(1 << 18)
+                    if not b:
+                        break
+                    fh.write(b)
+                    got += len(b)
+                    if total:
+                        self.progress = min(0.99, got / total)
 
             pub = base64.b64decode(C.UPDATE_PUBLIC_KEY)
             sig = base64.b64decode(info["signature"])
@@ -164,34 +179,62 @@ class Updater:
             if res.returncode != 0:
                 raise RuntimeError("The update's code signature is broken. It was not installed.")
 
-            script = os.path.join(work, "swap.sh")
-            with open(script, "w") as fh:
-                fh.write(_SWAP)
-            os.chmod(script, 0o755)
-            subprocess.Popen(["/bin/sh", script, str(os.getpid()), app, new_app, work],
-                             start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.staged = (app, new_app, work)
+            self.downloaded_version = info["version"]
+            self.progress = 1.0
+            self.state = "downloaded"
+            self.message = f"Update {info['version']} downloaded"
+        except Exception as e:
+            msg = str(e) if isinstance(e, RuntimeError) else \
+                "The update couldn't be downloaded. Try again, or download it from the website."
+            self._error(msg)
+
+    def apply(self, relaunch):
+        """Hand the staged update to a helper that swaps it in once the game exits."""
+        if not self.staged:
+            return False
+        app, new_app, work = self.staged
+        script = os.path.join(work, "swap.sh")
+        with open(script, "w") as fh:
+            fh.write(_SWAP)
+        os.chmod(script, 0o755)
+        subprocess.Popen(["/bin/sh", script, str(os.getpid()), app, new_app, work, "1" if relaunch else "0"],
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.staged = None
+        return True
+
+    def restart(self):
+        if self.apply(relaunch=True):
             self.state = "restarting"
             self.message = "Restarting Airflow…"
             self.ready_to_quit = True
-        except Exception as e:
-            msg = str(e) if isinstance(e, RuntimeError) else \
-                "The update couldn't be installed. Try again, or download it from the website."
-            self._error(msg)
 
 
 # Waits for the game to exit, swaps the bundle (keeping the old one until the new
 # one is in place), then relaunches.
 _SWAP = """#!/bin/sh
-PID="$1"; APP="$2"; NEW="$3"; WORK="$4"
+PID="$1"; APP="$2"; NEW="$3"; WORK="$4"; RELAUNCH="$5"
+LOG="$HOME/Library/Logs/Airflow/update.log"
+mkdir -p "$(dirname "$LOG")"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+log "waiting for Airflow ($PID) to quit"
 for i in $(seq 1 300); do kill -0 "$PID" 2>/dev/null || break; sleep 0.1; done
 OLD="$WORK/Airflow-old.app"
-mv "$APP" "$OLD" || exit 1
+if ! mv "$APP" "$OLD"; then log "could not move the old app"; exit 1; fi
 if mv "$NEW" "$APP"; then
   rm -rf "$OLD"
+  log "installed $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 else
   mv "$OLD" "$APP"
+  log "swap failed, kept the old app"
 fi
-open "$APP"
+if [ "$RELAUNCH" = "1" ]; then
+  sleep 0.5
+  for i in 1 2 3 4 5; do
+    if open "$APP"; then log "relaunched"; break; fi
+    log "open failed (try $i)"; sleep 1
+  done
+fi
 rm -rf "$WORK"
 """
 

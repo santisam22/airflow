@@ -38,6 +38,7 @@ def main():
     app = App(headless=(1400, 860))
     app.game = Game()
     app.toast = None
+    app.screen = "game"
     shot(app, "01_empty.png")
     app.game.money = 5000
     p1_demo(app.game)
