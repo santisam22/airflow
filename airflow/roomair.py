@@ -81,6 +81,7 @@ class RoomGrid:
             oy = (term.tile[1] + 0.5) * c
             q_dir = term.cfm / max(1, len(dirs))
             v0 = min(C.VMAX, C.JET_V_PER_CFM * q_dir * pdef.exit * (1.0 + 0.15 * (len(dirs) - 1)) ** 0.5)
+            v0 *= C.TERMINAL_STRENGTH
             L = pdef.throw * (4.5 + 0.11 * q_dir) * c / 4.0
             mask = self.room_masks[term.room]
             for e in dirs:

@@ -20,6 +20,14 @@ from . import config as C
 from .parts import BY_ID, DIRS, abs_ports, damper_k, rot_dir
 
 
+# per-port K for square junctions, by where the air goes relative to where it came in:
+# (straight through, 90-degree side branch, either outlet when fed into the side)
+JUNCTION_K = {
+    "tee": (0.12, 1.0, 0.75),
+    "cross": (0.2, 1.15, 0.9),
+}
+
+
 @dataclass
 class Leak:
     tile: tuple
@@ -127,6 +135,19 @@ def solve(plan, layout, blower_level=0, liner_level=0):
             taper = rot_dir(pdef.taper_from, pl["rot"])
             if d == branch and inflow_dir != taper:
                 k = 1.2   # taper facing the wrong way: behaves like a bad tee
+        elif pdef.id in JUNCTION_K and inflow_dir is not None:
+            # Air keeps its momentum: going straight through a junction is cheap,
+            # turning 90 degrees into a side branch is not.
+            run_k, branch_k, bull_k = JUNCTION_K[pdef.id]
+            ports = port_map[t]
+            if d == inflow_dir:
+                k = 0.05
+            elif d == (inflow_dir + 2) % 4:
+                k = run_k
+            elif (inflow_dir + 2) % 4 in ports:
+                k = branch_k
+            else:
+                k = bull_k    # fed into the side of a tee: both outlets are turns
         return k
 
     gains = np.zeros(len(edges))

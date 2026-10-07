@@ -141,6 +141,20 @@ class DuctGeometry:
                     q.append((ny, nx))
         return dist / self.R
 
+    def _ease(self, f, iters):
+        """Average each duct cell with its duct neighbours, so flow changes blend smoothly."""
+        m = self.mask.astype(float)
+        f = f * m
+        for _ in range(iters):
+            acc = f.copy()
+            cnt = m.copy()
+            acc[1:, :] += f[:-1, :]; cnt[1:, :] += m[:-1, :]
+            acc[:-1, :] += f[1:, :]; cnt[:-1, :] += m[1:, :]
+            acc[:, 1:] += f[:, :-1]; cnt[:, 1:] += m[:, :-1]
+            acc[:, :-1] += f[:, 1:]; cnt[:, :-1] += m[:, 1:]
+            f = np.where(self.mask, acc / np.maximum(cnt, 1), 0.0)
+        return f
+
     def target_speed(self, layout, net):
         """Steady-state speed (m/s) in every duct cell for these flows."""
         H, W = self.shape
@@ -152,12 +166,13 @@ class DuctGeometry:
             block = cfm[t[1] * R:(t[1] + 1) * R, t[0] * R:(t[0] + 1) * R]
             for d, m in arms:
                 block[m] = top if d is None else net.port_flow.get((t, d), 0.0)
+        cfm = self._ease(cfm, max(2, int(R * 0.7)))           # speed changes over ~a tile at a junction
         v = cfm * C.VMAX / C.DUCT_CFM_FOR_MAX
         s = self.s_finite
-        core = 1.0 + 0.55 * np.exp(-s / 2.2)                 # the jet out of the air handler
-        decay = 0.8 + 0.2 * np.exp(-s / 10.0)                # friction slows long runs
-        n = 0.1 + 0.8 * (1.0 - np.exp(-s / 4.0))             # boundary layer develops downstream
-        prof = 0.12 + 0.88 * self.w ** n
+        core = 1.0 + 0.35 * np.exp(-s / 2.2)                 # the jet out of the air handler
+        decay = 0.85 + 0.15 * np.exp(-s / 10.0)              # friction slows long runs
+        n = 0.08 + 0.42 * (1.0 - np.exp(-s / 4.0))           # boundary layer develops downstream
+        prof = 0.3 + 0.7 * self.w ** n
         out = v * core * decay * prof * self.bend
         out[~self.mask] = 0.0
         return np.clip(out, 0.0, C.VMAX)

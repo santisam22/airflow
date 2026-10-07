@@ -4,7 +4,7 @@ import os
 import sys
 
 APP_NAME = "Airflow"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 GITHUB_REPO = "santisam22/airflow"
 WEBSITE = "https://santisam22.github.io/airflow/"
@@ -29,8 +29,9 @@ VMAX = 2.0
 
 # Room air
 JET_V_PER_CFM = 0.026    # jet start speed (m/s) per CFM leaving a register face
-COVER_LO = 0.05          # below this speed a cell contributes 0 coverage
-COVER_HI = 0.25          # at/above this speed a cell is fully covered
+TERMINAL_STRENGTH = 0.6  # how hard registers and diffusers blow (1.0 = the strength in 0.2-0.3)
+COVER_LO = 0.03          # below this speed a cell contributes 0 coverage (scaled with TERMINAL_STRENGTH)
+COVER_HI = 0.15          # at/above this speed a cell is fully covered
 
 STARTING_MONEY = 150.0
 BASE_PAY = 20.0          # project 1 pay; part prices scale by pay / BASE_PAY
