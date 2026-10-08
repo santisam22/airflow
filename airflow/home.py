@@ -11,6 +11,7 @@ import time
 
 import pygame
 
+from . import admin
 from . import config as C
 from .parts import fmt_money
 from .projects import project
@@ -205,8 +206,8 @@ class HomeMixin:
     def _home_settings(self):
         p, th = self.p, self.theme
         W, H = self.logical
-        pw, ph = 460, 470
-        x, y = W / 2 - pw / 2, H / 2 - ph / 2 - 20
+        pw, ph = 460, 548
+        x, y = W / 2 - pw / 2, max(12, H / 2 - ph / 2 - 20)
         self._panel(x, y, pw, ph)
         self._back(x + 20, y + 20)
         p.text("Settings", 22, th["text"], (W / 2, y + 22), "midtop", bold=True)
@@ -246,6 +247,8 @@ class HomeMixin:
         p.rect(th["red"], r, width=1, radius=8)
         p.text("CLICK AGAIN TO ERASE EVERYTHING" if armed else "RESET ALL PROGRESS", 11,
                (255, 255, 255) if (hov or armed) else th["red"], (r[0] + iw / 2, r[1] + 17), "center", bold=True)
+        yy += 96
+        self.admin_block(ix, yy, iw)
 
     def _home_help(self):
         p, th = self.p, self.theme
@@ -351,6 +354,114 @@ class HomeMixin:
                bold=True)
         if sub:
             p.text(sub, 11, (235, 255, 235), (x + 52, y + 33))
+
+    # ------------------------------------------------------------ admin
+    ADMIN_LOCKED = "Enter the admin key to unlock admin mode."
+    ADMIN_ON = "Infinite money and metal, every part and house unlocked."
+
+    def admin_block_height(self, w):
+        text = self.ADMIN_ON if self.admin_key else self.ADMIN_LOCKED
+        extra = 16 * (len(self.p.wrap(text, 11, w)) - 1)
+        return (96 if not self.admin_key else 100) + extra
+
+    def admin_block(self, x, y, w):
+        """Admin section shared by both Settings screens. Returns its height."""
+        p, th = self.p, self.theme
+        p.text("ADMIN", 9, th["muted"], (x, y), bold=True)
+        text = self.ADMIN_ON if self.admin_key else self.ADMIN_LOCKED
+        lines = p.wrap(text, 11, w)
+        for i, ln in enumerate(lines):
+            p.text(ln, 11, th["text"], (x, y + 18 + 16 * i))
+        y += 16 * (len(lines) - 1)
+        if not self.admin_key:
+            fw = w - 96
+            fr = (x, y + 40, fw, 34)
+            self.button(fr, self.focus_key)
+            focus = self.key_focus
+            p.rect(th["panel"], fr, radius=8)
+            p.rect(th["accent"] if focus else th["border"], fr, width=1.5 if focus else 1, radius=8)
+            shown = "\u2022" * len(self.key_text)
+            if shown:
+                p.text(shown, 13, th["text"], (fr[0] + 12, fr[1] + 17), "midleft")
+            elif not focus:
+                p.text("XXXX-XXXX-XXXX-XXXX", 11, th["faint"], (fr[0] + 12, fr[1] + 17), "midleft")
+            if focus and int(self.t * 2) % 2 == 0:
+                cx = fr[0] + 13 + (p.text_w(shown, 13) if shown else 0)
+                p.line(th["text"], (cx, fr[1] + 9), (cx, fr[1] + 25), 1.5)
+            br = (x + fw + 8, y + 40, 88, 34)
+            hov = self.button(br, self.submit_key)
+            col = th["accent"] if not hov else tuple(max(0, c - 22) for c in th["accent"])
+            p.rect(col, br, radius=8)
+            p.text("UNLOCK", 11, (255, 255, 255), (br[0] + 44, br[1] + 17), "center", bold=True)
+            if self.key_error > time.time():
+                p.text("That key isn't right.", 10, th["red"], (x, y + 80))
+            return self.admin_block_height(w)
+        on = self.admin_on
+        half = (w - 8) / 2
+        for i, (label, val) in enumerate((("OFF", False), ("ON", True))):
+            r = (x + i * (half + 8), y + 40, half, 34)
+            act = on == val
+            hov = self.button(r, lambda v=val: self.set_admin(v))
+            col = (th["red"] if val else th["accent"]) if act else (th["border"] if hov else th["panel2"])
+            p.rect(col, r, radius=8)
+            p.text(f"ADMIN MODE {label}", 11, (255, 255, 255) if act else th["text"], (r[0] + half / 2, r[1] + 17),
+                   "center", bold=act)
+        r = (x, y + 80, p.text_w("Forget admin key", 10) + 4, 16)
+        hov = self.button(r, self.forget_key)
+        p.text("Forget admin key", 10, th["text"] if hov else th["muted"], (x, y + 81))
+        return self.admin_block_height(w)
+
+    def focus_key(self):
+        self.key_focus = True
+
+    def submit_key(self):
+        if admin.check(self.key_text):
+            self.admin_key = admin.normalise(self.key_text)
+            self.key_text = ""
+            self.key_focus = False
+            self.set_admin(True)
+            self.show_banner("Admin mode unlocked", "Infinite money and metal, everything unlocked.")
+        else:
+            self.key_error = time.time() + 3
+            self.key_text = ""
+
+    def set_admin(self, on):
+        self.admin_on = bool(on)
+        self.game.admin = bool(self.admin_key and self.admin_on)
+        self.game.dirty = True
+        self.save_settings()
+
+    def forget_key(self):
+        self.admin_key = ""
+        self.set_admin(False)
+
+    def key_input(self, ev):
+        """Typing into the admin key field. Returns True if the event was used."""
+        if not self.key_focus:
+            return False
+        if ev.type == pygame.TEXTINPUT:
+            if len(self.key_text) < 24:
+                self.key_text += "".join(ch for ch in ev.text if ch.isalnum() or ch == "-")
+            return True
+        if ev.type == pygame.KEYDOWN:
+            cmd = ev.mod & (pygame.KMOD_META | pygame.KMOD_CTRL)
+            if ev.key == pygame.K_BACKSPACE:
+                self.key_text = "" if cmd else self.key_text[:-1]
+            elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.submit_key()
+            elif ev.key == pygame.K_ESCAPE:
+                self.key_focus = False
+            elif cmd and ev.key == pygame.K_v:
+                try:
+                    from pygame import scrap
+                    txt = scrap.get_text() or ""
+                except Exception:
+                    txt = ""
+                self.key_text = (self.key_text + "".join(ch for ch in txt if ch.isalnum() or ch == "-"))[:24]
+            elif cmd and ev.key == pygame.K_q:
+                return False
+            return True
+        return False
 
     # ------------------------------------------------------------ input
     def home_key(self, k, cmd):

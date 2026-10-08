@@ -20,6 +20,7 @@ from .state import UPGRADES, ActionError, Game, upgrade_cost
 from .updater import Updater, whats_new_after_update
 from .anim import DETAIL_CELLS, DETAIL_HZ, FlowAnimator
 from .home import HomeMixin
+from . import admin
 from .particles import Particles
 
 TOP_H = 66
@@ -30,7 +31,7 @@ BOTTOM_H = 158
 HINT_H = 24
 
 EFF_COLORS = {1: (52, 84, 230), 2: (40, 170, 235), 3: (80, 200, 70), 4: (240, 200, 30), 5: (230, 60, 60)}
-PANELS = ["STATS", "UPGRADES", "PROJECTS", "APPEARANCE"]
+PANELS = ["STATS", "UPGRADES", "PROJECTS", "SETTINGS"]
 STRAIGHTS = {"galv", "flex"}
 
 
@@ -81,6 +82,11 @@ class App(HomeMixin):
         self.particles = Particles()
         self.t = 0.0                  # animation clock (seconds)
         self._anim_dirty = True
+        self.admin_key = ""           # set once a correct admin key has been entered
+        self.admin_on = False
+        self.key_text = ""            # what's typed in the admin key field
+        self.key_focus = False
+        self.key_error = 0.0
         self.load_settings()
         self.init_home()
         news = whats_new_after_update()
@@ -98,13 +104,19 @@ class App(HomeMixin):
                 d = json.load(fh)
             self.dark = bool(d.get("dark", False))
             self.air_detail = max(0, min(2, int(d.get("air_detail", 1))))
+            key = d.get("admin_key") or ""
+            if key and admin.check(key):          # re-checked on every launch
+                self.admin_key = key
+                self.admin_on = bool(d.get("admin_on", False))
         except (OSError, ValueError, TypeError):
             pass
+        self.game.admin = bool(self.admin_key and self.admin_on)
 
     def save_settings(self):
         try:
             with open(self._settings_path(), "w") as fh:
-                json.dump({"dark": self.dark, "air_detail": self.air_detail}, fh)
+                json.dump({"dark": self.dark, "air_detail": self.air_detail,
+                           "admin_key": self.admin_key, "admin_on": self.admin_on}, fh)
         except OSError:
             pass
 
@@ -393,11 +405,11 @@ class App(HomeMixin):
 
         # stats
         stats = [
-            ("MONEY", fmt_money(g.money), None),
+            ("MONEY", "\u221e  ADMIN" if g.admin else fmt_money(g.money), None),
             ("INCOME (ALL PROJECTS)", f"+${g.total_income():.1f}/s", None),
             ("AIR COVERAGE", f"{self.disp_total * 100:.0f}%", (self.disp_total, th["green"])),
             ("DELIVERED AIR", f"{g.net.delivered:.0f} CFM" if g.net else "0 CFM", None),
-            ("METAL USED", f"{g.metal_used():g} / {g.metal_limit()}",
+            ("METAL USED", f"{g.metal_used():g} / \u221e" if g.admin else f"{g.metal_used():g} / {g.metal_limit()}",
              (g.metal_used() / max(1, g.metal_limit()),
               th["red"] if g.metal_used() >= g.metal_limit() - 1 else th["accent"])),
         ]
@@ -538,14 +550,14 @@ class App(HomeMixin):
                 p.rect(th["border"], r2, radius=6)
                 p.text("MAXED", 11, th["muted"], (r2[0] + r2[2] / 2, r2[1] + 13), "center", bold=True)
             else:
-                cost = upgrade_cost(uid, lvl)
-                ok = g.money >= cost
+                cost = 0.0 if g.admin else upgrade_cost(uid, lvl)
+                ok = g.can_afford(cost)
                 hov = self.button(r2, lambda u=uid: self.act({"kind": "upgrade", "id": u}))
                 col = th["green"] if ok else th["border"]
                 if ok and hov:
                     col = tuple(max(0, c - 25) for c in col)
                 p.rect(col, r2, radius=6)
-                p.text(f"UPGRADE  {fmt_money(cost)}", 11, (255, 255, 255) if ok else th["muted"],
+                p.text("UPGRADE  FREE" if g.admin else f"UPGRADE  {fmt_money(cost)}", 11, (255, 255, 255) if ok else th["muted"],
                        (r2[0] + r2[2] / 2, r2[1] + 13), "center", bold=True)
             y += 122
 
@@ -587,14 +599,14 @@ class App(HomeMixin):
                     p.rect(th["accent_soft"] if not hov else th["accent"], br, radius=6)
                     p.text("GO TO PROJECT", 10, th["accent"] if not hov else (255, 255, 255),
                            (br[0] + br[2] / 2, by + 11), "center", bold=True)
-                elif pr.num == nxt and pr.playable:
-                    ok = g.money >= pr.buy
+                elif pr.playable and (pr.num == nxt or g.admin):
+                    ok = g.can_afford(0.0 if g.admin else pr.buy)
                     hov = self.button(br, lambda n=pr.num: self.buy(n))
                     col = th["green"] if ok else th["border"]
                     if ok and hov:
                         col = tuple(max(0, c - 25) for c in col)
                     p.rect(col, br, radius=6)
-                    p.text(f"BUY  {fmt_money(pr.buy)}", 10, (255, 255, 255) if ok else th["muted"],
+                    p.text("GET IT FREE" if g.admin else f"BUY  {fmt_money(pr.buy)}", 10, (255, 255, 255) if ok else th["muted"],
                            (br[0] + br[2] / 2, by + 11), "center", bold=True)
                 else:
                     p.rect(th["border"], br, radius=6)
@@ -606,39 +618,32 @@ class App(HomeMixin):
     def panel_scroll_y(self):
         return getattr(self, "_proj_scroll", 0.0)
 
-    def panel_appearance(self, r):
+    def panel_settings(self, r):
         p, th = self.p, self.theme
-        x, y, w = r.x, r.y, r.w
+        x, y, w = r.x, r.y - self.settings_scroll_y(), r.w
+        top = y
 
         def choice(label, options, cur, cb, y):
-            self.card(x, y, w, 40 + 30 * len(options))
+            self.card(x, y, w, 72)
             p.text(label, 9, th["muted"], (x + 12, y + 10), bold=True)
+            n = len(options)
+            bw = (w - 24 - 6 * (n - 1)) / n
             for i, opt in enumerate(options):
-                br = (x + 12, y + 30 + 30 * i, w - 24, 24)
+                br = (x + 12 + i * (bw + 6), y + 30, bw, 28)
                 act = i == cur
                 hov = self.button(br, lambda i=i: cb(i))
-                p.rect(th["green"] if act else (th["border"] if hov else th["panel"]), br, radius=6)
-                p.text(opt, 11, (255, 255, 255) if act else th["text"], (br[0] + br[2] / 2, br[1] + 12), "center",
+                p.rect(th["accent"] if act else (th["border"] if hov else th["panel"]), br, radius=6)
+                p.text(opt, 10, (255, 255, 255) if act else th["text"], (br[0] + bw / 2, br[1] + 14), "center",
                        bold=act)
-            return y + 50 + 30 * len(options)
+            return y + 82
 
         y = choice("AIR DETAIL", ["LOW", "MEDIUM", "HIGH"], self.air_detail, self.set_detail, y)
-        y = choice("INTERFACE", ["PAPER WHITE", "DARK MODE"], 1 if self.dark else 0, self.set_dark, y)
-        self.card(x, y, w, 120)
-        p.text("SAVE", 9, th["muted"], (x + 12, y + 10), bold=True)
-        p.text("Progress autosaves every few seconds.", 11, th["text"], (x + 12, y + 28))
-        br = (x + 12, y + 52, w - 24, 24)
-        hov = self.button(br, self.reset_save)
-        armed = getattr(self, "_reset_armed", 0) > time.time()
-        p.rect(th["red"] if (hov or armed) else th["panel"], br, radius=6)
-        p.rect(th["red"], br, width=1, radius=6)
-        p.text("CLICK AGAIN TO CONFIRM" if armed else "RESET ALL PROGRESS", 10,
-               (255, 255, 255) if (hov or armed) else th["red"], (br[0] + br[2] / 2, br[1] + 12), "center", bold=True)
-        y += 130
+        y = choice("INTERFACE", ["PAPER WHITE", "DARK"], 1 if self.dark else 0, self.set_dark, y)
+
+        # updates
         u = self.updater
-        self.card(x, y, w, 104)
+        self.card(x, y, w, 100)
         p.text("UPDATES", 9, th["muted"], (x + 12, y + 10), bold=True)
-        p.text(f"{C.APP_NAME} {C.VERSION}", 11, th["text"], (x + 12, y + 28), bold=True)
         if u.state == "checking":
             status = "Checking\u2026"
         elif u.state == "downloaded":
@@ -646,13 +651,13 @@ class App(HomeMixin):
         elif u.available:
             status = f"Version {u.available['version']} is available."
         elif u.last_result == "up_to_date":
-            status = "You're up to date."
+            status = f"You're up to date ({C.VERSION})."
         elif u.last_result == "failed":
             status = "Couldn't reach GitHub."
         else:
-            status = "Checks automatically every few hours."
-        p.text(status, 11, th["muted"], (x + 12, y + 46))
-        br = (x + 12, y + 68, w - 24, 24)
+            status = f"Version {C.VERSION}."
+        p.text(status, 11, th["text"], (x + 12, y + 28))
+        br = (x + 12, y + 56, w - 24, 30)
         if u.state == "downloaded":
             hov = self.button(br, self.restart_to_update)
             label = "RESTART TO INSTALL"
@@ -663,8 +668,32 @@ class App(HomeMixin):
             hov = self.button(br, lambda: self.updater.check(user=True))
             label = "CHECK FOR UPDATES"
         p.rect(th["accent"] if hov else th["accent_soft"], br, radius=6)
-        p.text(label, 10, (255, 255, 255) if hov else th["accent"], (br[0] + br[2] / 2, br[1] + 12), "center",
+        p.text(label, 10, (255, 255, 255) if hov else th["accent"], (br[0] + br[2] / 2, br[1] + 15), "center",
                bold=True)
+        y += 110
+
+        # reset
+        self.card(x, y, w, 96)
+        p.text("SAVE", 9, th["muted"], (x + 12, y + 10), bold=True)
+        p.text("Progress saves automatically.", 11, th["text"], (x + 12, y + 28))
+        br = (x + 12, y + 52, w - 24, 30)
+        hov = self.button(br, self.reset_save)
+        armed = getattr(self, "_reset_armed", 0) > time.time()
+        p.rect(th["red"] if (hov or armed) else th["panel"], br, radius=6)
+        p.rect(th["red"], br, width=1, radius=6)
+        p.text("CLICK AGAIN TO ERASE EVERYTHING" if armed else "RESET ALL PROGRESS", 10,
+               (255, 255, 255) if (hov or armed) else th["red"], (br[0] + br[2] / 2, br[1] + 15), "center", bold=True)
+        y += 106
+
+        # admin
+        h = 26 + self.admin_block_height(w - 24)
+        self.card(x, y, w, h)
+        self.admin_block(x + 12, y + 10, w - 24)
+        y += h + 10
+        self._settings_content_h = y - top
+
+    def settings_scroll_y(self):
+        return getattr(self, "_settings_scroll", 0.0)
 
     # ------------------------------------------------------------ bottom palette
     def draw_palette(self, r):
@@ -981,6 +1010,7 @@ class App(HomeMixin):
     def reset_save(self):
         if getattr(self, "_reset_armed", 0) > time.time():
             self.game.reset()
+            self.game.admin = bool(self.admin_key and self.admin_on)
             self.game.save()
             self.pv.fitted_for = None
             self.deselect()
@@ -1034,6 +1064,8 @@ class App(HomeMixin):
 
     def handle(self, ev):
         t = ev.type
+        if self.key_input(ev):
+            return
         if t == pygame.QUIT:
             self.running = False
         elif t in (getattr(pygame, "WINDOWSIZECHANGED", -1), getattr(pygame, "WINDOWRESIZED", -1),
@@ -1063,6 +1095,7 @@ class App(HomeMixin):
             self.on_key(ev)
 
     def on_left_down(self, pos):
+        self.key_focus = False          # clicking anywhere else leaves the key field
         for r, cb in reversed(self.buttons):
             if r.collidepoint(pos):
                 cb()
@@ -1152,6 +1185,10 @@ class App(HomeMixin):
         if self.build_mode and rects["bottom"].collidepoint(self.mouse):
             self.palette_scroll -= (ev.precise_y if hasattr(ev, "precise_y") else ev.y) * 40
             self.palette_scroll += (ev.precise_x if hasattr(ev, "precise_x") else ev.x) * 40
+            return
+        if self.panel == "SETTINGS" and rects["panel"].collidepoint(self.mouse):
+            mx = max(0, getattr(self, "_settings_content_h", 0) - (rects["panel"].h - 64))
+            self._settings_scroll = max(0.0, min(mx, self.settings_scroll_y() - ev.precise_y * 30))
             return
         if self.panel == "PROJECTS" and rects["panel"].collidepoint(self.mouse):
             mx = max(0, getattr(self, "_projects_content_h", 0) - (rects["panel"].h - 64))

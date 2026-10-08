@@ -1,1 +1,1 @@
-A gentler air handler and diffusers, and unused junction arms now act as if capped.
+The in-game Appearance tab is now Settings, with updates and reset, plus a key-protected admin mode.

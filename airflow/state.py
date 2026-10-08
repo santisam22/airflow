@@ -49,6 +49,7 @@ class Game:
         self.room_cov = []
         self.total_cov = 0.0
         self.avg_speed = 0.0
+        self.admin = False      # admin mode: everything free, no metal limit, all unlocks (not saved)
 
     # ------------------------------------------------------------ helpers
     @property
@@ -68,10 +69,18 @@ class Game:
         return sum(BY_ID[pl["type"]].metal for pl in lay.values())
 
     def price(self, pid):
+        if self.admin:
+            return 0.0
         return price_at(BY_ID[pid], self.plan.pay)
 
     def unlocked(self, pid):
-        return len(self.owned) >= BY_ID[pid].unlock
+        return self.admin or len(self.owned) >= BY_ID[pid].unlock
+
+    def metal_ok(self, extra):
+        return self.admin or self.metal_used() + extra <= self.metal_limit() + 1e-9
+
+    def can_afford(self, cost):
+        return self.admin or self.money >= cost - 1e-9
 
     def income_mult(self):
         return 1.0 + 0.13 * self.upgrades["service"]
@@ -120,9 +129,9 @@ class Game:
         old = self.layout.get(tuple(tile))
         refund_m = BY_ID[old["type"]].metal if old else 0.0
         refund_d = self.price(old["type"]) if old else 0.0
-        if self.metal_used() - refund_m + BY_ID[pid].metal > self.metal_limit() + 1e-9:
+        if not self.metal_ok(BY_ID[pid].metal - refund_m):
             return f"Metal limit reached for this project ({self.metal_limit()})"
-        if self.money + refund_d < self.price(pid) - 1e-9:
+        if not self.can_afford(self.price(pid) - refund_d):
             return "Not enough money"
         return None
 
@@ -173,9 +182,9 @@ class Game:
                     raise ActionError("Paste doesn't fit there")
                 if not self.unlocked(pl["type"]):
                     raise ActionError("Contains a locked part")
-            if self.metal_used() - refund_m + total_m > self.metal_limit() + 1e-9:
+            if not self.metal_ok(total_m - refund_m):
                 raise ActionError(f"Metal limit reached for this project ({self.metal_limit()})")
-            if self.money + refund_d < total_d - 1e-9:
+            if not self.can_afford(total_d - refund_d):
                 raise ActionError("Not enough money")
             if record:
                 self._snapshot()
@@ -209,8 +218,8 @@ class Game:
             lvl = self.upgrades[uid]
             if lvl >= UPG[uid][3]:
                 raise ActionError("Already maxed")
-            cost = upgrade_cost(uid, lvl)
-            if self.money < cost:
+            cost = 0.0 if self.admin else upgrade_cost(uid, lvl)
+            if not self.can_afford(cost):
                 raise ActionError("Not enough money")
             self.money -= cost
             self.upgrades[uid] = lvl + 1
@@ -219,12 +228,13 @@ class Game:
             lvl = self.upgrades[uid]
             if lvl <= 0:
                 return
-            if uid == "material":
+            if uid == "material" and not self.admin:
                 for num in self.owned:
                     if self.metal_used(num) > project(num).metal + lvl - 1:
                         raise ActionError("A project is using that metal")
             self.upgrades[uid] = lvl - 1
-            self.money += upgrade_cost(uid, lvl - 1) * 0.5
+            if not self.admin:
+                self.money += upgrade_cost(uid, lvl - 1) * 0.5
         elif kind == "buy_project":
             num = action["num"]
             p = project(num)
@@ -232,11 +242,12 @@ class Game:
                 return
             if not p.playable:
                 raise ActionError("This house isn't built yet")
-            if num != max(self.owned) + 1:
+            if num != max(self.owned) + 1 and not self.admin:
                 raise ActionError("Finish the previous project first")
-            if self.money < p.buy:
+            cost = 0.0 if self.admin else p.buy
+            if not self.can_afford(cost):
                 raise ActionError("Not enough money")
-            self.money -= p.buy
+            self.money -= cost
             self.owned.append(num)
             self.layouts.setdefault(num, {})
             self.coverage.setdefault(num, 0.0)

@@ -141,7 +141,7 @@ def main():
     app.logical = (1100, 700); app.surf = pygame.Surface((2200, 1400)); app.p.set_surface(app.surf, 2.0)
     frame(app)
     # every panel and view mode draws
-    for pn in ("STATS", "UPGRADES", "PROJECTS", "APPEARANCE", None):
+    for pn in ("STATS", "UPGRADES", "PROJECTS", "SETTINGS", None):
         app.panel = pn; frame(app)
     for _ in range(3):
         key(app, pygame.K_z)
@@ -162,6 +162,35 @@ def main():
     find_button(app, lambda r, cb: cb == app.restart_to_update)
     frame(app)
     assert app.banner[0] == "Update 9.9.9 downloaded"   # announced once, not re-triggered
+    # admin mode: a wrong key is refused...
+    from airflow import admin
+    app.home_page = "settings"; app.banner = None; frame(app)
+    click(app, find_button(app, lambda r, cb: cb == app.focus_key))
+    assert app.key_focus
+    app.handle(pygame.event.Event(pygame.TEXTINPUT, text="WRONG-KEYS-HERE-1234"))
+    key(app, pygame.K_b)                      # typing doesn't trigger game hotkeys
+    key(app, pygame.K_RETURN)
+    assert not app.admin_key and app.key_error > 0 and not app.game.admin
+    # ...the real one (kept outside the repo) unlocks it
+    kp = os.path.join(os.path.dirname(__file__), "..", "Private.nosync", "admin_key.txt")
+    if os.path.exists(kp):
+        real = [w for w in open(kp).read().split() if w.count("-") == 3][0]
+        click(app, find_button(app, lambda r, cb: cb == app.focus_key))
+        app.handle(pygame.event.Event(pygame.TEXTINPUT, text=real.lower()))
+        key(app, pygame.K_RETURN)
+        assert app.admin_key and app.game.admin
+        app.set_admin(False); assert not app.game.admin
+    # admin rules: free, no metal limit, everything unlocked, any house
+    g2 = Game(); g2.admin = True
+    assert g2.unlocked("swirl") and g2.unlocked("ybranch") and g2.price("galv") == 0
+    g2.money = 0
+    for x in range(1, 14):
+        for y2 in range(0, 9):
+            if (x, y2) != tuple(g2.plan.ahu):
+                g2.apply({"kind": "place", "type": "galv", "tile": (x, y2), "rot": 0})
+    assert g2.metal_used() > g2.metal_limit()
+    g2.apply({"kind": "upgrade", "id": "blower"}); assert g2.upgrades["blower"] == 1 and g2.money == 0
+    g2.apply({"kind": "buy_project", "num": 4}); assert 4 in g2.owned and g2.money == 0
     print("all play tests passed")
 
 
