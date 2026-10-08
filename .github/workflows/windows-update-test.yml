@@ -1,117 +1,95 @@
-# End-to-end check of Windows self-updating against a real release: builds an old
-# copy of Airflow (version 0.0.1), points it at that release's update.json, and checks
-# that it downloads the signed .exe, swaps itself out and relaunches as the new version.
+# End-to-end check of Windows self-updating, entirely on a Windows machine: builds an
+# old copy (0.0.1) and a new copy (0.0.2) of the current code, both trusting a throwaway
+# test key, signs the new one, serves it locally, and checks that the old copy downloads
+# it, swaps itself out and relaunches as the new version. The real release key is never
+# involved. Runs on every push that touches the updater, and can be run by hand.
 name: Windows update test
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release to update to (e.g. v0.9.0)"
-        required: true
-      ref:
-        description: "Source to build the old copy from (default: the same tag)"
-        required: false
+  push:
+    paths:
+      - "airflow/updater.py"
+      - "airflow/app.py"
+      - ".github/workflows/windows-update-test.yml"
 
 jobs:
   update:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || inputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - name: Build an old copy (0.0.1)
+      - name: Install
+        run: pip install -r requirements.txt pillow
+      - name: Test key
         shell: pwsh
         run: |
-          pip install -r requirements.txt pillow
-          (Get-Content airflow/config.py) -replace '^VERSION = .*', 'VERSION = "0.0.1"' | Set-Content airflow/config.py
-          pyinstaller --noconfirm --onefile --windowed --name Airflow --exclude-module tkinter main.py
-          New-Item -ItemType Directory C:\game | Out-Null
-          Copy-Item dist\Airflow.exe C:\game\Airflow.exe
-      - name: Let it update itself
+          @'
+          import base64, json, sys
+          sys.path.insert(0, "tests"); sys.path.insert(0, ".")
+          import test_update as T
+          priv, pub = T.keypair()
+          json.dump({"a": priv[0], "prefix": priv[1].hex(), "pub": base64.b64encode(pub).decode()}, open(r"C:\key.json", "w"))
+          '@ | Set-Content keygen.py
+          python keygen.py
+      - name: Build new (0.0.2) and old (0.0.1) copies
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "${{ inputs.tag }}" -p update.json -D C:\rel --repo "${{ github.repository }}"
-          $want = (Get-Content C:\rel\update.json | ConvertFrom-Json).win_sha256
-          if (-not $want) { throw "update.json has no signed Windows build" }
-          $env:AIRFLOW_UPDATE_MANIFEST = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/update.json"
+          $pub = (Get-Content C:\key.json | ConvertFrom-Json).pub
+          foreach ($v in "0.0.2", "0.0.1") {
+            (Get-Content airflow/config.py) -replace '^VERSION = .*', "VERSION = `"$v`"" `
+              -replace '^UPDATE_PUBLIC_KEY = .*', "UPDATE_PUBLIC_KEY = `"$pub`"" | Set-Content airflow/config.py
+            pyinstaller --noconfirm --onefile --windowed --name Airflow --exclude-module tkinter main.py --log-level WARN
+            New-Item -ItemType Directory -Force "C:\v$v" | Out-Null
+            Copy-Item dist\Airflow.exe "C:\v$v\Airflow.exe"
+          }
+          git checkout airflow/config.py
+      - name: Sign and serve the new copy
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory C:\srv, C:\game | Out-Null
+          Copy-Item C:\v0.0.2\Airflow.exe C:\srv\Airflow-Windows.exe
+          Copy-Item C:\v0.0.1\Airflow.exe C:\game\Airflow.exe
+          @'
+          import base64, hashlib, json, sys
+          sys.path.insert(0, "tests"); sys.path.insert(0, ".")
+          import test_update as T
+          from airflow import updater as U
+          k = json.load(open(r"C:\key.json"))
+          priv, pub = (k["a"], bytes.fromhex(k["prefix"])), base64.b64decode(k["pub"])
+          sha = hashlib.sha256(open(r"C:\srv\Airflow-Windows.exe", "rb").read()).hexdigest()
+          sig = base64.b64encode(T.sign(priv, pub, U.windows_message("0.0.2", sha))).decode()
+          json.dump({"version": "0.0.2", "url": "unused", "signature": "unused", "notes": "Test update",
+                     "win_url": "http://127.0.0.1:8765/Airflow-Windows.exe", "win_sha256": sha,
+                     "win_signature": sig}, open(r"C:\srv\update.json", "w"))
+          print("signed", sha)
+          '@ | Set-Content sign.py
+          python sign.py
+          Start-Process python -ArgumentList "-m", "http.server", "8765", "--bind", "127.0.0.1" -WorkingDirectory C:\srv
+          Start-Sleep 2
+      - name: Let the old copy update itself
+        shell: pwsh
+        run: |
+          $want = (Get-FileHash C:\srv\Airflow-Windows.exe -Algorithm SHA256).Hash
+          $env:AIRFLOW_UPDATE_MANIFEST = "http://127.0.0.1:8765/update.json"
           $env:AIRFLOW_TEST_UPDATE = "1"
           $env:AIRFLOW_SMOKE = "C:\game\after.png"
-          $env:AIRFLOW_SMOKE_SECS = "25"
+          $env:AIRFLOW_SMOKE_SECS = "20"
           Start-Process C:\game\Airflow.exe -WorkingDirectory C:\game
           $ok = $false
-          for ($i = 0; $i -lt 120; $i++) {
+          for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep 2
-            $have = (Get-FileHash C:\game\Airflow.exe -Algorithm SHA256).Hash.ToLower()
-            if ($have -eq $want) { $ok = $true; break }
+            if ((Get-FileHash C:\game\Airflow.exe -Algorithm SHA256).Hash -eq $want) { $ok = $true; break }
           }
           if (-not $ok) { throw "Airflow.exe was not replaced by the signed update" }
-          Write-Host "Airflow.exe replaced by the signed release build after $($i*2)s"
-          for ($i = 0; $i -lt 60 -and -not (Test-Path C:\game\after.png); $i++) { Start-Sleep 2 }
+          Write-Host "replaced after $($i*2)s"
+          for ($i = 0; $i -lt 45 -and -not (Test-Path C:\game\after.png); $i++) { Start-Sleep 2 }
           if (-not (Test-Path C:\game\after.png)) { throw "the updated game didn't start" }
           Start-Sleep 3
           if (Test-Path C:\game\Airflow.exe.old) { throw "the old copy wasn't cleaned up" }
-          Get-ChildItem C:\game | Format-Table Name, Length
-      - name: Run the release build directly (same settings)
-        if: always()
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download "${{ inputs.tag }}" -p Airflow-Windows.exe -D C:\direct --repo "${{ github.repository }}"
-          $env:AIRFLOW_UPDATE_MANIFEST = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/update.json"
-          $env:AIRFLOW_TEST_UPDATE = "1"
-          $env:AIRFLOW_SMOKE = "C:\direct\shot.png"
-          $env:AIRFLOW_SMOKE_SECS = "25"
-          $p = Start-Process C:\direct\Airflow-Windows.exe -WorkingDirectory C:\direct -PassThru
-          $done = $p.WaitForExit(90000)
-          Write-Host "direct run exited by itself: $done  screenshot: $(Test-Path C:\direct\shot.png)"
-          $env:AIRFLOW_SMOKE_SECS = "3"; $env:AIRFLOW_TEST_UPDATE = ""
-          Remove-Item C:\direct\shot.png -ErrorAction SilentlyContinue
-          $p = Start-Process C:\direct\Airflow-Windows.exe -WorkingDirectory C:\direct -PassThru
-          $done = $p.WaitForExit(90000)
-          Write-Host "3s run (no test hook) exited by itself: $done  screenshot: $(Test-Path C:\direct\shot.png)"
-      - name: Relaunch-method experiment
-        if: always()
-        shell: pwsh
-        run: |
-          @'
-          import os, subprocess, time
-          exe = r"C:\direct\Airflow-Windows.exe"
-          for name, flags, reset in (("detached+reset", 0x8 | 0x200, True), ("detached", 0x8 | 0x200, False),
-                                     ("plain+reset", 0, True), ("newgroup+reset", 0x200, True)):
-              shot = rf"C:\direct\{name}.png"
-              env = dict(os.environ, AIRFLOW_SMOKE=shot, AIRFLOW_SMOKE_SECS="5")
-              if reset: env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-              p = subprocess.Popen([exe], cwd=r"C:\direct", creationflags=flags, close_fds=True, env=env)
-              for _ in range(60):
-                  if os.path.exists(shot): break
-                  time.sleep(1)
-              print(name, "screenshot:", os.path.exists(shot), "still running:", p.poll() is None)
-              p.kill()
-          '@ | Set-Content C:\direct\exp.py
-          python C:\direct\exp.py
-          @'
-          import os, subprocess, time
-          exe = r"C:\direct\Airflow-Windows.exe"
-          ea = dict(os.environ, AIRFLOW_SMOKE=r"C:\direct\A.png", AIRFLOW_SMOKE_SECS="30")
-          eb = dict(os.environ, AIRFLOW_SMOKE=r"C:\direct\B.png", AIRFLOW_SMOKE_SECS="5", PYINSTALLER_RESET_ENVIRONMENT="1")
-          a = subprocess.Popen([exe], cwd=r"C:\direct", env=ea)
-          time.sleep(8)
-          b = subprocess.Popen([exe], cwd=r"C:\direct", env=eb, creationflags=0x8 | 0x200)
-          time.sleep(2); a.kill()
-          for _ in range(60):
-              if os.path.exists(r"C:\direct\B.png"): break
-              time.sleep(1)
-          print("second copy while first running -> screenshot:", os.path.exists(r"C:\direct\B.png"))
-          b.kill()
-          '@ | Set-Content C:\direct\exp2.py
-          python C:\direct\exp2.py
+          Write-Host "updated, relaunched and cleaned up"
       - name: Diagnostics
         if: always()
         shell: pwsh
