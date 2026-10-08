@@ -79,6 +79,11 @@ class App(HomeMixin):
         self.updater = Updater()
         if C.IS_WINDOWS:
             cleanup_windows_leftovers()
+            try:
+                with open(os.path.join(C.save_dir(), "update.log"), "a") as fh:
+                    fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + f"started {C.VERSION} pid {os.getpid()}\n")
+            except OSError:
+                pass
         self.anim = FlowAnimator()
         self._ui_cache = {}
         self.t = 0.0                  # animation clock (seconds)

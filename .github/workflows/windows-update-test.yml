@@ -57,6 +57,13 @@ jobs:
           Start-Sleep 3
           if (Test-Path C:\game\Airflow.exe.old) { throw "the old copy wasn't cleaned up" }
           Get-ChildItem C:\game | Format-Table Name, Length
+      - name: Diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem C:\game | Format-Table Name, Length
+          Get-Process | Where-Object { $_.ProcessName -like "Airflow*" } | Format-Table Id, ProcessName, MainWindowTitle, StartTime
+          if (Test-Path "$env:APPDATA\Airflow\update.log") { Get-Content "$env:APPDATA\Airflow\update.log" }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

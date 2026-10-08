@@ -333,7 +333,16 @@ def windows_exe():
     return os.path.realpath(sys.executable)
 
 
+def _wlog(msg):
+    try:
+        with open(os.path.join(C.save_dir(), "update.log"), "a") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
+
+
 def swap_windows(exe, new, relaunch):
+    _wlog(f"swap {exe} relaunch={relaunch}")
     old = exe + ".old"
     try:
         if os.path.exists(old):
@@ -342,19 +351,26 @@ def swap_windows(exe, new, relaunch):
         old = exe + f".old{int(time.time())}"
     try:
         os.rename(exe, old)            # allowed while it's running
-    except OSError:
+    except OSError as e:
+        _wlog(f"rename running exe failed: {e}")
         return False
     try:
         os.rename(new, exe)
-    except OSError:
+    except OSError as e:
+        _wlog(f"moving the new exe in failed: {e}")
         os.rename(old, exe)            # put things back
         return False
+    _wlog("installed")
     if relaunch:
         flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0    # DETACHED_PROCESS | NEW_PROCESS_GROUP
         # A one-file build started from inside another would reuse its parent's unpacked
         # files, which vanish when this copy exits; this makes it a fresh, separate game.
         env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
-        subprocess.Popen([exe], cwd=os.path.dirname(exe), creationflags=flags, close_fds=True, env=env)
+        try:
+            pr = subprocess.Popen([exe], cwd=os.path.dirname(exe), creationflags=flags, close_fds=True, env=env)
+            _wlog(f"relaunched pid {pr.pid}")
+        except OSError as e:
+            _wlog(f"relaunch failed: {e}")
     return True
 
 
