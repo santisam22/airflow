@@ -22,7 +22,7 @@ BANNER_SECS = 4.5
 CONTROLS = [
     ("B", "Build mode on / off"), ("R", "Rotate part"), ("T", "Aim a register"), ("F", "Adjust a damper"),
     ("Q", "Pick the hovered part"), ("X", "Remove mode"), ("Z", "Switch view"), ("Drag", "Select parts"),
-    ("C / V", "Copy / paste"), ("Cmd Z", "Undo"), ("WASD", "Move the camera"), ("Scroll", "Zoom"),
+    ("C / V", "Copy / paste"), (f"{C.MOD_KEY} Z", "Undo"), ("WASD", "Move the camera"), ("Scroll", "Zoom"),
     ("1-4", "Part categories"), ("Tab", "Cycle panels"), ("Esc", "Home screen"),
 ]
 
@@ -177,7 +177,7 @@ class HomeMixin:
                          hint="ENTER")
         self._big_button((bx, by + bh + 12, bw, bh), "SETTINGS", lambda: self._open_page("settings"))
         self._big_button((bx, by + 2 * (bh + 12), bw, bh), "HOW TO PLAY", lambda: self._open_page("help"))
-        self._big_button((bx, by + 3 * (bh + 12), bw, bh), "QUIT", self.quit_game, hint="CMD Q")
+        self._big_button((bx, by + 3 * (bh + 12), bw, bh), "QUIT", self.quit_game, hint=f"{C.MOD_KEY.upper()} Q")
 
     def _open_page(self, page):
         self.home_page = page
@@ -318,8 +318,8 @@ class HomeMixin:
             p.rect(th["panel2"], r, radius=8)
             p.text("RESTARTING…", 11, th["text"], (r[0] + r[2] / 2, r[1] + 16), "center", bold=True)
         else:
-            self._big_button(r, "TRY AGAIN" if u.state == "error" else "DOWNLOAD UPDATE", self.start_download,
-                             primary=True)
+            label = "TRY AGAIN" if u.state == "error" else ("DOWNLOAD UPDATE" if C.IS_MAC else "GET IT ON THE WEBSITE")
+            self._big_button(r, label, self.start_download, primary=True)
 
     def draw_banner(self):
         """'Update x downloaded' drops down from the top, waits, then slides back up."""

@@ -1,0 +1,71 @@
+# Builds the Windows version on GitHub's Windows machines and attaches it to the release.
+# Runs whenever a release is published (release.sh does that); can also be run by hand
+# for an existing release tag.
+name: Windows build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach to (e.g. v0.6.1), or a branch for a test build"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pillow
+
+      - name: Tests
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: |
+          python tests/test_flow.py
+          python tests/test_play.py
+
+      - name: Build Airflow.exe
+        run: |
+          mkdir build
+          python tools/make_icon.py build/icon.png
+          pyinstaller --noconfirm --onefile --windowed --name Airflow --icon build/icon.png --exclude-module tkinter main.py
+
+      - name: Launch it once (screenshot after 3 s)
+        shell: pwsh
+        run: |
+          $env:AIRFLOW_SMOKE = "$PWD\smoke.png"
+          $p = Start-Process -FilePath "dist\Airflow.exe" -PassThru
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); throw "Airflow.exe did not quit by itself" }
+          if (-not (Test-Path smoke.png)) { throw "Airflow.exe ran but took no screenshot" }
+          Get-Item smoke.png | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke-screenshot
+          path: smoke.png
+
+      - name: Attach to the release
+        if: startsWith(env.TAG, 'v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          Copy-Item dist\Airflow.exe Airflow-Windows.exe
+          gh release upload "$env:TAG" Airflow-Windows.exe --clobber --repo "${{ github.repository }}"

@@ -806,7 +806,7 @@ class App(HomeMixin):
         hints = [("B", "build"), ("R", "rotate"), ("T", "aim register"), ("F", "damper"), ("Q", "pick part"),
                  ("X", "remove"), ("Z", "view"), ("Drag", "select"), ("C / V", "copy / paste"), ("WASD", "move"),
                  ("RMB", "pan / drop"), ("Scroll", "zoom"), ("1-4", "categories"), ("Tab", "panels"),
-                 ("Cmd Z", "undo")]
+                 (f"{C.MOD_KEY} Z", "undo")]
         widths = [p.text_w(k, 8, True) + 10 + p.text_w(v, 9) + 16 for k, v in hints]
         x = r.centerx - sum(widths) / 2
         cy = r.y + r.h / 2

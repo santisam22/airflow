@@ -44,9 +44,16 @@ BASE_PAY = 20.0          # project 1 pay; part prices scale by pay / BASE_PAY
 AUTOSAVE_SECONDS = 10.0
 
 
+IS_MAC = sys.platform == "darwin"
+IS_WINDOWS = sys.platform.startswith("win")
+MOD_KEY = "Cmd" if IS_MAC else "Ctrl"      # shown in shortcut hints
+
+
 def save_dir():
-    if sys.platform == "darwin":
+    if IS_MAC:
         base = os.path.expanduser("~/Library/Application Support")
+    elif IS_WINDOWS:
+        base = os.environ.get("APPDATA") or os.path.expanduser("~\\AppData\\Roaming")
     else:
         base = os.path.expanduser("~/.local/share")
     path = os.path.join(base, APP_NAME)

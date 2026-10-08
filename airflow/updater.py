@@ -114,6 +114,12 @@ class Updater:
     def download(self):
         if not self.available or self.state in ("downloading", "downloaded", "restarting"):
             return
+        if not C.IS_MAC:
+            # self-installing is Mac-only; on Windows the new version comes from the website
+            import webbrowser
+            webbrowser.open(C.WEBSITE)
+            self.message = "Opened the download page in your browser."
+            return
         app = app_bundle()
         if app is None:
             return self._error("Updates install into the packaged app. You're running from source.")
