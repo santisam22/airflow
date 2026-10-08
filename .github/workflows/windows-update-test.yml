@@ -96,6 +96,22 @@ jobs:
               p.kill()
           '@ | Set-Content C:\direct\exp.py
           python C:\direct\exp.py
+          @'
+          import os, subprocess, time
+          exe = r"C:\direct\Airflow-Windows.exe"
+          ea = dict(os.environ, AIRFLOW_SMOKE=r"C:\direct\A.png", AIRFLOW_SMOKE_SECS="30")
+          eb = dict(os.environ, AIRFLOW_SMOKE=r"C:\direct\B.png", AIRFLOW_SMOKE_SECS="5", PYINSTALLER_RESET_ENVIRONMENT="1")
+          a = subprocess.Popen([exe], cwd=r"C:\direct", env=ea)
+          time.sleep(8)
+          b = subprocess.Popen([exe], cwd=r"C:\direct", env=eb, creationflags=0x8 | 0x200)
+          time.sleep(2); a.kill()
+          for _ in range(60):
+              if os.path.exists(r"C:\direct\B.png"): break
+              time.sleep(1)
+          print("second copy while first running -> screenshot:", os.path.exists(r"C:\direct\B.png"))
+          b.kill()
+          '@ | Set-Content C:\direct\exp2.py
+          python C:\direct\exp2.py
       - name: Diagnostics
         if: always()
         shell: pwsh
