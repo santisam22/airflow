@@ -82,6 +82,9 @@ class App(HomeMixin):
             try:
                 with open(os.path.join(C.save_dir(), "update.log"), "a") as fh:
                     fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + f"started {C.VERSION} pid {os.getpid()}\n")
+                    if os.environ.get("AIRFLOW_TEST_UPDATE"):
+                        env = {k: v for k, v in os.environ.items() if k.startswith(("SDL", "PYGAME", "_PYI", "_MEI", "PYINSTALLER", "AIRFLOW"))}
+                        fh.write(f"  env {env}\n")
             except OSError:
                 pass
         self.anim = FlowAnimator()
@@ -230,8 +233,17 @@ class App(HomeMixin):
         import os
         smoke = os.environ.get("AIRFLOW_SMOKE")   # path: run ~3 s, save a screenshot, quit
         start = time.time()
+        beat = 0
         while self.running:
             dt = self.clock.tick(60) / 1000.0
+            if os.environ.get("AIRFLOW_TEST_UPDATE") and time.time() - start > beat:
+                beat += 5
+                try:
+                    with open(os.path.join(C.save_dir(), "update.log"), "a") as fh:
+                        fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + f"  {C.VERSION} loop t={time.time() - start:.0f}s"
+                                 f" screen={self.screen} upd={self.updater.state}\n")
+                except OSError:
+                    pass
             for ev in pygame.event.get():
                 self.handle(ev)
             self.update(dt)
