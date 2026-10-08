@@ -76,6 +76,26 @@ jobs:
           $p = Start-Process C:\direct\Airflow-Windows.exe -WorkingDirectory C:\direct -PassThru
           $done = $p.WaitForExit(90000)
           Write-Host "3s run (no test hook) exited by itself: $done  screenshot: $(Test-Path C:\direct\shot.png)"
+      - name: Relaunch-method experiment
+        if: always()
+        shell: pwsh
+        run: |
+          @'
+          import os, subprocess, time
+          exe = r"C:\direct\Airflow-Windows.exe"
+          for name, flags, reset in (("detached+reset", 0x8 | 0x200, True), ("detached", 0x8 | 0x200, False),
+                                     ("plain+reset", 0, True), ("newgroup+reset", 0x200, True)):
+              shot = rf"C:\direct\{name}.png"
+              env = dict(os.environ, AIRFLOW_SMOKE=shot, AIRFLOW_SMOKE_SECS="5")
+              if reset: env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+              p = subprocess.Popen([exe], cwd=r"C:\direct", creationflags=flags, close_fds=True, env=env)
+              for _ in range(60):
+                  if os.path.exists(shot): break
+                  time.sleep(1)
+              print(name, "screenshot:", os.path.exists(shot), "still running:", p.poll() is None)
+              p.kill()
+          '@ | Set-Content C:\direct\exp.py
+          python C:\direct\exp.py
       - name: Diagnostics
         if: always()
         shell: pwsh
