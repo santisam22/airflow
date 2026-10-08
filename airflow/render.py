@@ -6,7 +6,7 @@ import numpy as np
 import pygame
 
 from . import config as C
-from .parts import BY_ID, DAMPER_LEVELS, DIRS, EIGHTHS, abs_ports, throw_dirs
+from .parts import BY_ID, DIRS, EIGHTHS, abs_ports, damper_open, exit_open, throw_dirs
 from .roomair import heat_rgba, speed_color
 
 HW = 0.28  # half duct width (tiles)
@@ -42,11 +42,11 @@ def body_poly(pdef):
         ports = set(pdef.ports)
         if ports == {0, 1, 2, 3}:
             return [(0, a), (a, a), (a, 0), (b, 0), (b, a), (1, a), (1, b), (b, b), (b, 1), (a, 1), (a, b), (0, b)]
-        if pdef.id == "ybranch":
+        if pdef.shape_id == "ybranch":
             return [(0, a), (a, a), (a, 0), (b, 0), (b, 1), (a, 1), (a, b), (0, b)]
-        if pdef.id == "taperl":
+        if pdef.shape_id == "taperl":
             return [(0, a), (1, a), (1, b), (b, b), (b, 1), (a, 1), (0.08, b), (0, b)]
-        if pdef.id == "taperr":
+        if pdef.shape_id == "taperr":
             return [(0, a), (1, a), (1, b), (0.92, b), (b, 1), (a, 1), (a, b), (0, b)]
         return [(0, a), (1, a), (1, b), (b, b), (b, 1), (a, 1), (a, b), (0, b)]
     if k == "cap":
@@ -108,6 +108,14 @@ def draw_part(p, pdef, placed, x0, y0, T, fill, outline, flow=0.0, theme=None, s
         p.poly(outline, poly, lw)
 
     k = pdef.kind
+    if pdef.dampered and stage != "stroke":
+        for d0 in pdef.ports:
+            # each exit's blade sits in its arm, near the tile edge
+            dx, dy = DIRS[d0]
+            centre = (0.5 + dx * 0.36, 0.5 + dy * 0.36)
+            axis = 1 if dx else 0               # pipe direction of this arm (1 = E-W, 0 = N-S)
+            _blade(p, outline, tp, centre, axis, exit_open(pdef, placed, (d0 + rot) % 4) if "rot" in placed
+                   else 1.0, max(1.0, lw * 1.2), 0.2)
     if pdef.shape == "flex":
         for i in range(1, 7):
             u = i / 7
@@ -122,18 +130,18 @@ def draw_part(p, pdef, placed, x0, y0, T, fill, outline, flow=0.0, theme=None, s
              tp((0.6, 0.5 + HW + 0.07))]
         p.poly(outline, r)
     elif k == "damper":
-        lvl = placed.get("damper", 0)
-        ang = [0.0, 0.5, 0.9, 1.25][lvl % 4]
-        c = (0.5, 0.5)
-        dx, dy = math.sin(ang) * 0.24, math.cos(ang) * 0.24
-        p.line(outline, tp((c[0] - dx, c[1] - dy)), tp((c[0] + dx, c[1] + dy)), lw * 1.6)
-        p.circle(outline, tp(c), T * 0.05)
+        # the blade lies along the pipe when open and turns across it as it closes
+        _blade(p, outline, tp, (0.5, 0.5), 1, damper_open(placed), lw * 1.7, 0.27)
+        p.circle(outline, tp((0.5, 0.5)), T * 0.05)
     elif k == "booster":
         cx, cy = tp((0.5, 0.5))
         p.circle(fill, (cx, cy), T * 0.3)
         p.circle(outline, (cx, cy), T * 0.3, lw)
-        tri = [tp((0.66, 0.5)), tp((0.4, 0.36)), tp((0.4, 0.64))]
-        p.poly(outline, tri)
+        tier = {"booster": 1, "booster2": 2, "booster3": 3}.get(pdef.id, 1)
+        for i in range(tier):                # one arrow per tier, pointing downstream
+            o = (i - (tier - 1) / 2) * 0.13
+            tri = [tp((0.6 + o, 0.5)), tp((0.44 + o, 0.38)), tp((0.44 + o, 0.62))]
+            p.poly(outline, tri)
     elif k == "terminal":
         box = [tp((0.16, 0.16)), tp((0.84, 0.16)), tp((0.84, 0.84)), tp((0.16, 0.84))]
         face = theme["panel"] if theme else (255, 255, 255)
@@ -159,6 +167,18 @@ def draw_part(p, pdef, placed, x0, y0, T, fill, outline, flow=0.0, theme=None, s
             for e in throw_dirs(pdef, aim):
                 dx, dy = EIGHTHS[e]
                 _arrow(p, outline, cx, cy, dx, dy, T, 0.27)
+
+
+def _blade(p, color, tp, centre, axis, open_frac, width, half):
+    """A damper blade at `centre` (unit tile, rot 0) in a pipe running E-W (axis 1) or N-S (axis 0).
+    Fully open it lies along the pipe; fully shut it lies straight across it."""
+    a = (1.0 - open_frac) * math.pi / 2
+    if axis == 1:
+        dx, dy = math.cos(a) * half, math.sin(a) * half
+    else:
+        dx, dy = math.sin(a) * half, math.cos(a) * half
+    cx, cy = centre
+    p.line(color, tp((cx - dx, cy - dy)), tp((cx + dx, cy + dy)), width)
 
 
 def _arrow(p, color, cx, cy, dx, dy, T, length, small=False):

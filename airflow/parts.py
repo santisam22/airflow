@@ -43,6 +43,13 @@ class PartDef:
     wide: bool = False
     power: float = 1.0    # how hard a terminal blows into the room (4-way diffuser = 1.0)
     shape: str = ""       # drawing hint
+    boost: float = 0.0    # inline fans: share of upstream losses won back
+    base: str = ""        # dampered junctions: the junction they're built on (shape and physics)
+    dampered: bool = False
+
+    @property
+    def shape_id(self):
+        return self.base or self.id
 
 
 def _p(**kw):
@@ -61,11 +68,17 @@ PARTS = [
        desc="Seals a duct end. Open ends dump air into the attic!",
        ports={W: 0.0}, kind="cap"),
     _p(id="damper", name="Volume Damper", category="STRAIGHT", price=20, metal=1.5, efficiency=3,
-       desc="Restricts how much air passes. Press F (or click with no part selected) to throttle a branch.",
+       desc="Restricts how much air passes, in 10% steps down to fully shut. Click it to set it, or press F.",
        ports={W: 0.075, E: 0.075}, kind="damper", unlock=2),
-    _p(id="booster", name="Inline Booster Fan", category="STRAIGHT", price=48, metal=2, efficiency=3,
-       desc="Adds a push of pressure mid-run. Air flows the way the arrow points.",
-       ports={W: 0.05, E: 0.05}, kind="booster", unlock=4),
+    _p(id="booster", name="Inline Booster Fan T1", category="STRAIGHT", price=48, metal=2, efficiency=3,
+       desc="Wins back 15% of the air lost before it. Air flows the way the arrow points.",
+       ports={W: 0.05, E: 0.05}, kind="booster", unlock=4, boost=0.15),
+    _p(id="booster2", name="Inline Booster Fan T2", category="STRAIGHT", price=130, metal=2.5, efficiency=4,
+       desc="A stronger fan: wins back 30% of the air lost before it. Air flows the way the arrows point.",
+       ports={W: 0.05, E: 0.05}, kind="booster", unlock=4, boost=0.30),
+    _p(id="booster3", name="Inline Booster Fan T3", category="STRAIGHT", price=300, metal=3, efficiency=5,
+       desc="The strongest fan: wins back 45% of the air lost before it. Air flows the way the arrows point.",
+       ports={W: 0.05, E: 0.05}, kind="booster", unlock=4, boost=0.45),
 
     # ---------------- TURN ----------------
     _p(id="elbow90", name="Sharp 90° Elbow", category="TURN", price=6, metal=1, efficiency=1,
@@ -101,6 +114,8 @@ PARTS = [
        desc="Splits flow evenly into two smooth 45° legs.",
        ports={W: 0.06, N: 0.15, S: 0.15}, kind="tee", unlock=REWARDS),
 
+    # dampered junctions: click one to set how open each exit is (filled in below)
+
     # ---------------- TRANSITION (terminals) ----------------
     _p(id="bareboot", name="Bare Boot", category="TRANSITION", price=0, metal=0.5, efficiency=1,
        desc="For the not-so bright individuals.",
@@ -131,6 +146,17 @@ PARTS = [
        exit=0.8, unlock=4, power=1.15),
 ]
 
+def _dampered(base):
+    b = next(p for p in PARTS if p.id == base)
+    return PartDef(**{**b.__dict__, "id": base + "_d", "name": "Dampered " + b.name,
+                      "price": round(b.price * 1.6 + 8, 1), "metal": b.metal + 0.5,
+                      "desc": "Has a damper on every exit. Click it to set how open each exit is (0-100%).",
+                      "unlock": max(b.unlock, 2), "base": base, "dampered": True})
+
+
+_at = PARTS.index(next(p for p in PARTS if p.id == "ybranch")) + 1
+PARTS[_at:_at] = [_dampered(b) for b in ("tee", "cross", "taperl", "taperr", "ybranch")]
+
 BY_ID = {p.id: p for p in PARTS}
 
 
@@ -157,7 +183,23 @@ def throw_dirs(pdef, aim):
     return [(aim + t) % 8 for t in pdef.throws]
 
 
-DAMPER_LEVELS = [1.0, 0.7, 0.45, 0.25]
+DAMPER_LEVELS = [1.0, 0.7, 0.45, 0.25]   # pre-0.6 saves stored one of these as "damper"
+
+
+def damper_open(pl):
+    """How open a Volume Damper is, 0.0 (shut) .. 1.0 (open), in 10% steps."""
+    if "open" in pl:
+        return max(0.0, min(1.0, round(float(pl["open"]) * 10) / 10))
+    return round(DAMPER_LEVELS[pl.get("damper", 0) % len(DAMPER_LEVELS)] * 10) / 10
+
+
+def exit_open(pdef, pl, d_abs):
+    """How open a dampered junction's exit (an absolute direction) is."""
+    if not pdef.dampered:
+        return 1.0
+    d0 = (d_abs - pl.get("rot", 0)) % 4      # stored by the part's own (unrotated) port
+    v = pl.get("exits", {}).get(str(d0), 1.0)
+    return max(0.0, min(1.0, round(float(v) * 10) / 10))
 
 
 def damper_k(level):

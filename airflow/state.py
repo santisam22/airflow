@@ -7,7 +7,7 @@ import time
 
 from . import config as C
 from .network import solve
-from .parts import BY_ID, DAMPER_LEVELS, default_aim, price_at
+from .parts import BY_ID, abs_ports, damper_open, default_aim, price_at
 from .projects import PROJECTS, project
 from .roomair import RoomGrid
 
@@ -159,7 +159,9 @@ class Game:
             if pdef.kind == "terminal":
                 pl["aim"] = action.get("aim", default_aim(pdef, rot)) % 8
             if pdef.kind == "damper":
-                pl["damper"] = action.get("damper", 0)
+                pl["open"] = float(action.get("open", 1.0))
+            if pdef.dampered:
+                pl["exits"] = dict(action.get("exits", {}))
             self.layout[tile] = pl
         elif kind == "remove":
             tiles = [tuple(t) for t in action["tiles"] if tuple(t) in self.layout]
@@ -202,7 +204,27 @@ class Game:
             pl = self.layout.get(t)
             if not pl or BY_ID[pl["type"]].kind != "damper":
                 raise ActionError("Hover a volume damper to throttle it")
-            pl["damper"] = (pl.get("damper", 0) + 1) % len(DAMPER_LEVELS)
+            cur = damper_open(pl)                    # F: 10% more closed, then back to open
+            pl["open"] = 1.0 if cur <= 0.0 else round(cur - 0.1, 1)
+            pl.pop("damper", None)
+        elif kind == "set_open":
+            # click window: set a Volume Damper, or one exit of a dampered junction
+            t = tuple(action["tile"])
+            pl = self.layout.get(t)
+            if not pl:
+                raise ActionError("Nothing to adjust there")
+            pdef = BY_ID[pl["type"]]
+            v = max(0.0, min(1.0, round(float(action["value"]) * 10) / 10))
+            if pdef.kind == "damper":
+                pl["open"] = v
+                pl.pop("damper", None)
+            elif pdef.dampered:
+                d0 = int(action["port"])                 # the part's own (unrotated) port
+                if d0 not in pdef.ports:
+                    raise ActionError("That junction has no such exit")
+                pl.setdefault("exits", {})[str(d0)] = v
+            else:
+                raise ActionError("That part has no damper")
         elif kind == "rotate_placed":
             t = tuple(action["tile"])
             pl = self.layout.get(t)

@@ -2,23 +2,23 @@
 
 Air is treated like water poured into the ducts, not like a pressure system:
 
-* The air handler always moves its full airflow. It is split equally between
-  the sides of the unit that have a duct leading somewhere: one side gets 100%,
-  two sides get 50% each, and so on.
+* Every side of the air handler that has a duct leading somewhere gets the
+  unit's full airflow (since 0.6: sides aren't split, so more sides = more air).
 * Inside the ducts, air is shared out by destination. Every outlet (a register,
   or an open end dumping into the attic) wants an equal share, so at each
   junction the flow divides in proportion to how many outlets lie beyond each
   arm. An arm that leads nowhere (capped, or a dead end) takes nothing, so a
   junction costs nothing unless air actually goes through it. A volume damper
-  shrinks its branch's share and the rest goes elsewhere.
+  (or a dampered junction's exit) set to x% open shrinks that branch's share to
+  x%; at 0% it's shut, and the rest goes elsewhere.
 * Open ends leak into the attic, except the unused arms of a junction (tee,
   cross, tapered or Y-branch): those count as capped.
 * Travel costs a little: every tile loses a small fraction to friction, and
   each fitting loses more for the path the air takes through it (straight
   through a tee is cheap, turning into its branch is not). Losses come from the
   parts' loss coefficients K.
-* An inline booster fan, pushing the way its arrow points, puts back 15% of
-  the air lost upstream of it.
+* An inline booster fan, pushing the way its arrow points, puts back part of
+  the air lost upstream of it: 15% (T1), 30% (T2) or 45% (T3).
 
 If ducts form a loop, air follows the shortest route from the air handler and
 the closing link carries nothing.
@@ -29,7 +29,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from . import config as C
-from .parts import BY_ID, DAMPER_LEVELS, DIRS, abs_ports, rot_dir
+from .parts import BY_ID, DIRS, abs_ports, damper_open, exit_open, rot_dir
 
 # per-port K for square junctions, by where the air goes relative to where it came in:
 # (straight through, 90-degree side branch, either outlet when fed into the side).
@@ -44,7 +44,6 @@ JUNCTION_KINDS = ("tee", "tapered")   # T-Branch, 4-Way Cross, Y-Branch, Tapered
 
 LOSS_PER_K = 0.06        # fraction lost per unit of loss coefficient along a path
 TRAVEL_LOSS = 0.006      # fraction lost per tile travelled (x4 in flex duct)
-BOOST_RECOVER = 0.15     # share of upstream losses an inline booster puts back
 
 
 @dataclass
@@ -80,6 +79,7 @@ class Result:
     open_ports: dict = field(default_factory=dict)    # tile -> list of open dirs
     port_flow: dict = field(default_factory=dict)     # (tile, dir) -> CFM through that port
     tree: dict = field(default_factory=dict)          # tile -> [(child tile, out dir, CFM)] for particles
+    inflow: dict = field(default_factory=dict)        # tile -> port the air comes in through
 
 
 def _port_k(pdef, pl, d, inflow):
@@ -95,8 +95,8 @@ def _port_k(pdef, pl, d, inflow):
         taper = rot_dir(pdef.taper_from, pl["rot"])
         if d == branch and inflow != taper:
             k = 1.2   # taper facing the wrong way: behaves like a bad tee
-    elif pdef.id in JUNCTION_K:
-        run_k, branch_k, bull_k = JUNCTION_K[pdef.id]
+    elif pdef.shape_id in JUNCTION_K:
+        run_k, branch_k, bull_k = JUNCTION_K[pdef.shape_id]
         if d == inflow:
             k = STRAIGHT_K
         elif d == (inflow + 2) % 4:
@@ -150,6 +150,7 @@ def solve(plan, layout, blower_level=0, liner_level=0):
             order.append(nb)
             q.append(nb)
     res.connected = set(parent)
+    res.inflow = dict(inflow)
 
     # --- outlets: registers and open ends ------------------------------
     sinks = {t: [] for t in parent}   # tile -> [("room", None) | ("leak", dir)]
@@ -179,11 +180,18 @@ def solve(plan, layout, blower_level=0, liner_level=0):
 
     # --- demand: how many outlets lie beyond each part (dampers shrink it)
     weight = {}
+
+    def arm(t, d, c):
+        """Demand down the arm leaving t through port d, after that exit's damper."""
+        if t == ahu:
+            return weight[c]
+        pl = layout[t]
+        return weight[c] * exit_open(BY_ID[pl["type"]], pl, d)
+
     for t in reversed(order):
-        w = float(len(sinks[t])) + sum(weight[c] for _, c in children[t])
+        w = float(len(sinks[t])) + sum(arm(t, d, c) for d, c in children[t])
         if t != ahu and BY_ID[layout[t]["type"]].kind == "damper":
-            f = DAMPER_LEVELS[layout[t].get("damper", 0) % len(DAMPER_LEVELS)]
-            w *= f * f
+            w *= damper_open(layout[t])
         weight[t] = w
 
     def path_loss(t, d_out):
@@ -208,11 +216,10 @@ def solve(plan, layout, blower_level=0, liner_level=0):
     flow_in = {t: 0.0 for t in parent}
     lost_in = {t: 0.0 for t in parent}
     if live_sides:
-        share = q_free / len(live_sides)
-        for d, c in live_sides:
-            flow_in[c] = share
-            res.port_flow[(ahu, d)] = share
-        res.ahu_flow = q_free
+        for d, c in live_sides:              # every live side gets the full airflow
+            flow_in[c] = q_free
+            res.port_flow[(ahu, d)] = q_free
+        res.ahu_flow = q_free * len(live_sides)
     res.part_flow[ahu] = res.ahu_flow
     res.tree[ahu] = [(c, d, flow_in[c]) for d, c in live_sides]
 
@@ -224,14 +231,14 @@ def solve(plan, layout, blower_level=0, liner_level=0):
         pdef = BY_ID[pl["type"]]
         if pdef.kind == "booster" and qin > 0:
             if inflow[t] == rot_dir(3, pl["rot"]):          # air enters behind the fan
-                gain = BOOST_RECOVER * lost
+                gain = pdef.boost * lost
                 qin += gain
                 lost -= gain
                 res.boosted += gain
         res.part_flow[t] = qin
         res.port_flow[(t, inflow[t])] = qin
         res.tree[t] = []
-        w_total = len(sinks[t]) + sum(weight[c] for _, c in children[t])
+        w_total = len(sinks[t]) + sum(arm(t, d, c) for d, c in children[t])
         if qin <= 0 or w_total <= 0:
             continue
         for kind, d in sinks[t]:
@@ -249,9 +256,10 @@ def solve(plan, layout, blower_level=0, liner_level=0):
                 res.delivered += out
                 res.room_cfm[room] = res.room_cfm.get(room, 0.0) + out
         for d, c in children[t]:
-            if weight[c] <= 0:
+            a = arm(t, d, c)
+            if a <= 0:
                 continue
-            frac = weight[c] / w_total
+            frac = a / w_total
             part = qin * frac
             loss = path_loss(t, d)
             out = part * (1.0 - loss)
@@ -271,5 +279,5 @@ def solve(plan, layout, blower_level=0, liner_level=0):
         res.part_k[t] = float(sum(abs_ports(pdef, pl["rot"]).values())) + \
             (pdef.sink_k if pdef.kind == "terminal" else 0.0)
         res.part_flow.setdefault(t, 0.0)
-    res.static_pct = 100.0 * res.lost / q_free if res.ahu_flow else 0.0
+    res.static_pct = 100.0 * res.lost / res.ahu_flow if res.ahu_flow else 0.0
     return res

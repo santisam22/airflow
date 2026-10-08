@@ -97,10 +97,10 @@ What the UI shows:
 - Placing a part previews a ghost outline; invalid placements tint red.
 
 ### Airflow model (since 0.4.0: air flows like water)
-1. **The unit always moves its full airflow** (290 CFM, +10% per Blower Motor level). It is split equally between the sides of the unit that lead somewhere: one side 100%, two sides 50% each, and so on.
-2. **Air is shared by destination.** Every outlet (a register, or an open end leaking into the attic) gets an equal share. At each junction the flow divides by how many outlets lie beyond each arm. An arm that leads nowhere (capped, or a dead end) takes nothing, so a junction costs nothing unless air goes through it. A junction's open, unused arm counts as capped; open ends on other parts leak into the attic. A damper shrinks its branch's share.
+1. **Every connected side of the unit gets its full airflow** (290 CFM each, +10% per Blower Motor level). Sides aren't split, so more sides means more air (since 0.6).
+2. **Air is shared by destination.** Every outlet (a register, or an open end leaking into the attic) gets an equal share. At each junction the flow divides by how many outlets lie beyond each arm. An arm that leads nowhere (capped, or a dead end) takes nothing, so a junction costs nothing unless air goes through it. A junction's open, unused arm counts as capped; open ends on other parts leak into the attic. A Volume Damper, or one exit of a dampered junction, set to x% open (10% steps, 0% = shut) shrinks that branch's share to x%, and the rest goes elsewhere. Click either part to open its window.
 3. **Travel costs a little:** 0.6% per tile (2.4% in flex), plus a loss for each fitting's path from its loss coefficient K: `loss = 1 − exp(−(0.06·K + travel))`. Going straight through a tee or cross costs the same as a straight duct; turning into a branch costs K ≈ 1. Smooth Duct Liner cuts all losses by 5% per level.
-4. **Inline booster fans** (pushing the way the arrow points) put back 15% of the air lost upstream of them.
+4. **Inline booster fans** (pushing the way the arrows point) put back part of the air lost upstream of them: T1 15%, T2 30%, T3 45%.
 5. **Terminals blow by power:** single-arrow registers are weakest, 2-way and corner diffusers are stronger, and 4-way, linear slot and swirl diffusers are strongest. Room coverage comes from the jets plus drift through the room; walls block it and doorways let it through.
 6. **Movement:** particles flow through the ducts and puff out of registers; the room glow pulses outward from each register.
 

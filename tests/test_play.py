@@ -162,9 +162,27 @@ def main():
     find_button(app, lambda r, cb: cb == app.restart_to_update)
     frame(app)
     assert app.banner[0] == "Update 9.9.9 downloaded"   # announced once, not re-triggered
+    # damper window: clicking a Volume Damper opens it; a segment sets 10% steps; outside closes it
+    app.screen = "game"; app.home_page = "main"; app.panel = None; app.selected = None; app.remove_mode = False
+    g3 = app.game
+    g3.money = 1e6
+    g3.owned = [1, 2]; app.go_home(); app.play(); frame(app)
+    g3.layouts[g3.current] = {}; g3.dirty = True
+    g3.apply({"kind": "place", "type": "galv", "tile": (1, 4), "rot": 0})
+    g3.apply({"kind": "place", "type": "damper", "tile": (2, 4), "rot": 0})
+    g3.apply({"kind": "place", "type": "regboot", "tile": (3, 4), "rot": 0})
+    frame(app)
+    click(app, center(app, (2, 4)))
+    assert app.popup == (2, 4), app.popup
+    segs = [(r, cb) for r, cb in app.buttons if r.h < 30 and r.w < 40 and app.popup_rect(app.pv.view).contains(r)]
+    click(app, segs[4][0].center)              # SHUT is first; segments 10%.. -> this one is 40%
+    assert abs(g3.layout[(2, 4)]["open"] - 0.4) < 1e-9, g3.layout[(2, 4)]
+    click(app, find_button(app, lambda r, cb: cb == app.close_popup))
+    assert app.popup is None
+
     # admin mode: a wrong key is refused...
     from airflow import admin
-    app.home_page = "settings"; app.banner = None; frame(app)
+    app.go_home(); app.home_page = "settings"; app.banner = None; frame(app)
     click(app, find_button(app, lambda r, cb: cb == app.focus_key))
     assert app.key_focus
     app.handle(pygame.event.Event(pygame.TEXTINPUT, text="WRONG-KEYS-HERE-1234"))

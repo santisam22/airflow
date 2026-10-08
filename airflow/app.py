@@ -11,8 +11,8 @@ import pygame
 
 from . import config as C
 from .painter import DARK, LIGHT, Painter
-from .parts import (BY_ID, CATEGORIES, DAMPER_LEVELS, DIRS, REWARDS, abs_ports, by_category, default_aim,
-                    fmt_money, fmt_price)
+from .parts import (BY_ID, CATEGORIES, DIRS, REWARDS, abs_ports, by_category, damper_open, default_aim,
+                    exit_open, fmt_money, fmt_price)
 from .projects import PROJECTS, project, room_count
 from .render import PlanView, draw_part, draw_plan, flow_color
 from .roomair import colormap, speed_to_t
@@ -84,6 +84,7 @@ class App(HomeMixin):
         self._anim_dirty = True
         self.admin_key = ""           # set once a correct admin key has been entered
         self.admin_on = False
+        self.popup = None             # tile whose damper window is open
         self.key_text = ""            # what's typed in the admin key field
         self.key_focus = False
         self.key_error = 0.0
@@ -297,7 +298,9 @@ class App(HomeMixin):
             self.draw_palette(rects["bottom"])
         self.draw_hints(rects["hints"])
         if ui:
-            self.draw_tooltip(view)
+            if self.popup is None:
+                self.draw_tooltip(view)
+            self.draw_popup(view)
             self.draw_toast(view)
 
     def draw_overlays(self, view):
@@ -474,10 +477,10 @@ class App(HomeMixin):
         lines = []
         if n:
             lines = [
-                (f"Blower (free air): {n.blower_free:.0f} CFM", th["text"]),
+                (f"Air handler: {n.blower_free:.0f} CFM per side", th["text"]),
                 (f"Moving through ducts: {n.ahu_flow:.0f} CFM", th["text"]),
                 (f"Delivered to rooms: {n.delivered:.0f} CFM", th["text"]),
-                (f"Sides of the unit in use: {n.outlets} ({100 / n.outlets:.0f}% each)" if n.outlets
+                (f"Sides of the unit in use: {n.outlets} (full airflow each)" if n.outlets
                  else "Sides of the unit in use: 0", th["text"]),
                 (f"Lost along the ducts: {n.lost:.0f} CFM ({n.static_pct:.0f}%)", th["text"]),
                 (f"Registers connected: {sum(1 for t in n.terminals if t.cfm > 0.5)}", th["text"]),
@@ -761,7 +764,7 @@ class App(HomeMixin):
         icon = (r.x + 8, r.y + 10, 56, 56)
         p.rect(th["panel"], icon, radius=6)
         p.rect(th["border"], icon, width=1, radius=6)
-        placed = {"type": pdef.id, "rot": 0, "aim": 2, "damper": 1}
+        placed = {"type": pdef.id, "rot": 0, "aim": 2, "open": 0.6}
         T = 40
         draw_part(p, pdef, placed, icon[0] + 8, icon[1] + 8, T, th["panel"], th["outline"], theme=th)
         tx = r.x + 72
@@ -837,8 +840,11 @@ class App(HomeMixin):
                 into = next((x.cfm for x in n.terminals if x.tile == tuple(t)), 0.0) if n else 0.0
                 out[2] = (f"Into the room: {into:.0f} CFM  (T to aim)", th["text"], False)
             if pdef.kind == "damper":
-                lvl = pl.get("damper", 0)
-                out.append((f"Damper {DAMPER_LEVELS[lvl] * 100:.0f}% open  (F to adjust)", th["text"], False))
+                out.append((f"Damper {damper_open(pl) * 100:.0f}% open  (click to adjust)", th["text"], False))
+            if pdef.dampered:
+                opens = [exit_open(pdef, pl, d) for d in abs_ports(pdef, pl["rot"]) if not n or d != n.inflow.get(tuple(t))]
+                out.append(("Exits: " + ", ".join(f"{v * 100:.0f}%" for v in opens) + " open  (click to adjust)",
+                            th["text"], False))
             if n:
                 for leak in n.leaks:
                     if leak.tile == tuple(t) and leak.cfm >= 1:
@@ -878,6 +884,107 @@ class App(HomeMixin):
         p.rect(th["border"], (x, y, w, h), width=1, radius=8)
         for i, (t, col, b) in enumerate(wrapped):
             p.text(t, 11, col, (x + 12, y + 7 + 16 * i), bold=b)
+
+    # ------------------------------------------------------------ damper window
+    DIR_NAMES = ["North", "East", "South", "West"]
+    DIR_ARROWS = ["\u2191", "\u2192", "\u2193", "\u2190"]
+
+    def popup_rows(self):
+        """[(label, abs dir or None, part port or None, open fraction, CFM)] for the open window."""
+        t = self.popup
+        pl = self.game.layout.get(t) if t else None
+        if not pl:
+            return None
+        pdef = BY_ID[pl["type"]]
+        n = self.game.net
+        if pdef.kind == "damper":
+            return [("Open", None, None, damper_open(pl), n.part_flow.get(t, 0.0) if n else 0.0)]
+        if not pdef.dampered:
+            return None
+        inflow = n.inflow.get(t) if n else None
+        rows = []
+        for d_abs in sorted(abs_ports(pdef, pl["rot"])):
+            if d_abs == inflow:
+                continue
+            d0 = (d_abs - pl["rot"]) % 4
+            cfm = n.port_flow.get((t, d_abs), 0.0) if n else 0.0
+            rows.append((f"{self.DIR_ARROWS[d_abs]}  {self.DIR_NAMES[d_abs]} exit", d_abs, d0,
+                         exit_open(pdef, pl, d_abs), cfm))
+        return rows
+
+    def popup_rect(self, view):
+        rows = self.popup_rows() or []
+        w, h = 318, 52 + 50 * len(rows) + 8
+        tx, ty = self.pv.tile_xy(self.popup)
+        T = self.pv.T
+        x = tx + T + 10
+        if x + w > view.right - 6:
+            x = tx - w - 10
+        y = max(view.y + 6, min(ty + T / 2 - h / 2, view.bottom - h - 6))
+        x = max(view.x + 6, x)
+        return pygame.Rect(int(x), int(y), w, h)
+
+    def draw_popup(self, view):
+        rows = self.popup_rows()
+        if rows is None:
+            self.popup = None
+            return
+        p, th = self.p, self.theme
+        r = self.popup_rect(view)
+        pl = self.game.layout[self.popup]
+        pdef = BY_ID[pl["type"]]
+        # outline the part being edited
+        tx, ty = self.pv.tile_xy(self.popup)
+        p.rect(th["accent"], (tx, ty, self.pv.T, self.pv.T), width=2, radius=4)
+        p.rect(th["shadow"], (r.x + 2, r.y + 4, r.w, r.h), radius=12)
+        p.rect(th["panel"], r, radius=12)
+        p.rect(th["border"], r, width=1, radius=12)
+        p.text(pdef.name, 12, th["text"], (r.x + 14, r.y + 12), bold=True)
+        p.text("How open each exit is" if pdef.dampered else "How open the damper is", 9, th["muted"],
+               (r.x + 14, r.y + 30))
+        close = (r.right - 30, r.y + 8, 22, 22)
+        self.button(close, self.close_popup)
+        p.text("\u00d7", 18, th["muted"], (close[0] + 11, close[1] + 10), "center")
+        y = r.y + 52
+        if not rows:
+            p.text("Connect it to the air handler first.", 11, th["text"], (r.x + 14, y + 6))
+        for label, d_abs, d0, val, cfm in rows:
+            p.text(label, 11, th["text"], (r.x + 14, y + 2), bold=True)
+            p.text(f"{val * 100:.0f}% open  \u2022  {cfm:.0f} CFM", 10, th["muted"], (r.right - 14, y + 3),
+                   "topright")
+            # SHUT, then ten segments for 10%..100%
+            sx, sy = r.x + 14, y + 20
+            shut = (sx, sy, 40, 18)
+            hov = self.button(shut, lambda d0=d0: self.set_open(d0, 0.0))
+            closed = val <= 0.0
+            p.rect(th["red"] if closed else (th["border"] if hov else th["panel2"]), shut, radius=5)
+            p.text("SHUT", 8, (255, 255, 255) if closed else th["text"], (sx + 20, sy + 9), "center", bold=True)
+            seg_x = sx + 46
+            seg_w = (r.right - 14 - seg_x - 9 * 3) / 10
+            for i in range(10):
+                v = (i + 1) / 10
+                sr = (seg_x + i * (seg_w + 3), sy, seg_w, 18)
+                hov = self.button(sr, lambda d0=d0, v=v: self.set_open(d0, v))
+                on = val >= v - 1e-6
+                col = th["accent"] if on else (th["border"] if hov else th["panel2"])
+                p.rect(col, sr, radius=4)
+                if i in (4, 9):
+                    p.text(f"{int(v * 100)}", 7, (255, 255, 255) if on else th["muted"],
+                           (sr[0] + seg_w / 2, sy + 9), "center", bold=True)
+            y += 50
+
+    def set_open(self, port, value):
+        self.act({"kind": "set_open", "tile": self.popup, "port": port, "value": value})
+
+    def close_popup(self):
+        self.popup = None
+
+    def open_popup(self, tile):
+        pl = self.game.layout.get(tuple(tile)) if tile else None
+        if pl and (BY_ID[pl["type"]].kind == "damper" or BY_ID[pl["type"]].dampered):
+            self.popup = tuple(tile)
+            return True
+        return False
 
     def draw_toast(self, view):
         if not self.toast:
@@ -957,7 +1064,12 @@ class App(HomeMixin):
             self.act({"kind": "aim", "tile": self.hover_tile})
 
     def damper(self):
-        if self.hover_tile:
+        if not self.hover_tile:
+            return
+        pl = self.game.layout.get(tuple(self.hover_tile))
+        if pl and BY_ID[pl["type"]].dampered:
+            self.open_popup(self.hover_tile)
+        else:
             self.act({"kind": "damper", "tile": self.hover_tile})
 
     def pick(self):
@@ -1102,6 +1214,14 @@ class App(HomeMixin):
                 return
         if self.screen != "game":
             return
+        if self.popup is not None:
+            inside = self.popup_rect(self.pv.view).collidepoint(pos)
+            self.popup = None           # a click outside the window closes it
+            if inside:
+                return
+            if self.pv.view.collidepoint(pos) and self.open_popup(self.pv.tile_at(*pos)) and not self.selected:
+                return
+            return
         rects = self.layout_rects()
         if self.panel and rects["panel"].collidepoint(pos):
             return
@@ -1124,9 +1244,7 @@ class App(HomeMixin):
             self.place_at(tile)
             self.drag = {"kind": "place", "last": tile}
             return
-        pl = self.game.layout.get(tuple(tile))
-        if pl and BY_ID[pl["type"]].kind == "damper":
-            self.act({"kind": "damper", "tile": tile})
+        if self.open_popup(tile):
             return
         self.selection.clear()
         self.drag = {"kind": "select", "start": pos}
@@ -1247,7 +1365,9 @@ class App(HomeMixin):
             i = PANELS.index(self.panel) + 1 if self.panel else 0
             self.panel = PANELS[i] if i < len(PANELS) else None
         elif k == pygame.K_ESCAPE:
-            if self.selected or self.remove_mode or self.paste_mode or self.selection:
+            if self.popup is not None:
+                self.popup = None
+            elif self.selected or self.remove_mode or self.paste_mode or self.selection:
                 self.deselect()
             else:
                 self.go_home()
