@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Airflow</title>
-<meta name="description" content="A duct-building airflow puzzle game for Mac. Route air from the air handler into every room.">
+<meta name="description" content="A duct-building airflow puzzle game for Mac and Windows. Route air from the air handler into every room.">
 <meta property="og:title" content="Airflow">
 <meta property="og:description" content="A duct-building airflow puzzle game for Mac.">
 <meta property="og:image" content="https://santisam22.github.io/airflow/screenshot.jpg">
@@ -87,6 +87,12 @@
                  opacity: .85; }
   .card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 14px 40px rgba(58, 92, 255, .18); }
   .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .dl-row { display: flex; flex-wrap: wrap; gap: 12px; max-width: 560px; }
+  .dl-row .card { flex: 1 1 240px; max-width: none; padding: 18px; }
+  .dl-row .card .os { font-size: 16px; white-space: nowrap; }
+  .dl-row .card .meta { font-size: 13px; }
+  .card.secondary::after { opacity: .35; }
+  .card.secondary .btn { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
   .card .os { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 19px; }
   .card svg { width: 22px; height: 22px; fill: currentColor; flex: none; }
   .card .meta { color: var(--muted); font-size: 14px; }
@@ -212,20 +218,29 @@
 
   <div class="hero">
     <div>
-      <span class="eyebrow"><i></i>A Mac game about moving air</span>
+      <span class="eyebrow"><i></i>A game about moving air · Mac &amp; Windows</span>
       <h1>Get the air where it <span class="flow">needs to go.</span></h1>
       <p class="tagline">Run ducts from the air handler, split them into every room, and watch the air fill the house. The better your layout, the more each job pays.</p>
-      <a class="card" id="dl-mac" download>
-        <span class="os">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.37 12.64c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.77.74 2.98.72 1.24-.02 2.02-1.12 2.77-2.23.88-1.28 1.24-2.52 1.26-2.59-.03-.01-2.41-.92-2.43-3.68zM14.1 5.9c.63-.77 1.06-1.83.94-2.9-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.27z"/></svg>
-          Download for Mac
-        </span>
-        <span class="meta" id="dl-meta">macOS 12 or later · Apple silicon · 24 MB</span>
-        <span class="btn">Download .dmg
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg></span>
-      </a>
-      <p class="note">Free. New versions download right from the game's home screen.</p>
-      <p class="note warn" id="not-mac">Airflow is a Mac game. Open this page on your Mac to download it.</p>
+      <div class="dl-row">
+        <a class="card" id="dl-mac" download>
+          <span class="os">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.37 12.64c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.77.74 2.98.72 1.24-.02 2.02-1.12 2.77-2.23.88-1.28 1.24-2.52 1.26-2.59-.03-.01-2.41-.92-2.43-3.68zM14.1 5.9c.63-.77 1.06-1.83.94-2.9-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.27z"/></svg>
+            Download for Mac
+          </span>
+          <span class="meta" id="dl-meta">macOS 12 or later · Apple silicon</span>
+          <span class="btn">Download .dmg <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg></span>
+        </a>
+        <a class="card secondary" id="dl-win" download>
+          <span class="os">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.2 10.4 4.2v7.1H3zM11.3 4.1 21 2.8v8.5h-9.7zM3 12.2h7.4v7.1L3 18.3zM11.3 12.2H21v8.6l-9.7-1.3z"/></svg>
+            Download for Windows
+          </span>
+          <span class="meta" id="dl-win-meta">Windows 10 or 11 · 64-bit</span>
+          <span class="btn">Download .exe <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0-5-5m5 5 5-5M5 20h14"/></svg></span>
+        </a>
+      </div>
+      <p class="note">Free. Your version is highlighted. New versions show up right on the game's home screen.</p>
+      <p class="note warn" id="not-desktop">Airflow runs on Mac and Windows computers. Open this page on one to download it.</p>
     </div>
 
     <!-- animated floor plan -->
@@ -380,8 +395,8 @@
     <h2>Installed in a minute.</h2>
     <div class="two" style="margin-top:24px">
       <div>
-        <details open>
-          <summary>1. Install</summary>
+        <details id="help-mac" open>
+          <summary>1. Install on Mac</summary>
           <ol>
             <li>Open <b>Airflow.dmg</b> and drag <b>Airflow</b> into <b>Applications</b>.</li>
             <li>Open Airflow. If macOS says it “could not verify” the app, click <b>Done</b>.</li>
@@ -389,9 +404,17 @@
             <li>Enter your Mac password and click <b>Open Anyway</b> again. You only need to do this once.</li>
           </ol>
         </details>
+        <details id="help-win">
+          <summary>1. Install on Windows</summary>
+          <ol>
+            <li>Download <b>Airflow-Windows.exe</b>. It's the whole game, with nothing to install. Put it anywhere you like, such as your Desktop.</li>
+            <li>Double-click it. If Windows says <b>“Windows protected your PC”</b>, click <b>More info</b>, then <b>Run anyway</b>. You only need to do this once per version.</li>
+            <li>The first start takes a few seconds while it unpacks.</li>
+          </ol>
+        </details>
         <details>
           <summary>Updates and your save</summary>
-          <p>Airflow checks for new versions a few seconds after it opens and every few hours. When one is out, the home screen shows a <b>Download Update</b> button. Once it finishes, a banner confirms the download, and the new version starts the next time you restart Airflow. Updates are signed, and Airflow refuses any that aren't. Your progress stays on your Mac and carries over between versions.</p>
+          <p>Airflow checks for new versions a few seconds after it opens and every few hours. When one is out, the home screen tells you. On Mac, <b>Download Update</b> fetches it, a banner confirms the download, and the new version starts the next time you restart Airflow. Updates are signed, and Airflow refuses any that aren't. On Windows, the button brings you back to this page for the new .exe. Your progress stays on your computer and carries over between versions.</p>
         </details>
       </div>
       <div>
@@ -407,7 +430,7 @@
           <summary>Controls</summary>
           <ul>
             <li><kbd>B</kbd> build · <kbd>R</kbd> rotate · <kbd>T</kbd> aim · <kbd>F</kbd> damper · <kbd>Q</kbd> pick part · <kbd>X</kbd> remove</li>
-            <li><kbd>Z</kbd> view · drag to select · <kbd>C</kbd> / <kbd>V</kbd> copy and paste · <kbd>⌘Z</kbd> undo</li>
+            <li><kbd>Z</kbd> view · drag to select · <kbd>C</kbd> / <kbd>V</kbd> copy and paste · <kbd>⌘Z</kbd> / <kbd>Ctrl Z</kbd> undo</li>
             <li><kbd>WASD</kbd> move · right-drag to pan · scroll to zoom · <kbd>1</kbd>–<kbd>4</kbd> categories · <kbd>Tab</kbd> panels</li>
           </ul>
         </details>
@@ -426,10 +449,15 @@
 
   <div class="cta">
     <h2>Ready to clear the air?</h2>
-    <p>Free for Mac. Updates download from the home screen.</p>
-    <a class="btn" id="dl-mac-2" download>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.37 12.64c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.77.74 2.98.72 1.24-.02 2.02-1.12 2.77-2.23.88-1.28 1.24-2.52 1.26-2.59-.03-.01-2.41-.92-2.43-3.68zM14.1 5.9c.63-.77 1.06-1.83.94-2.9-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.27z"/></svg>
-      Download for Mac</a>
+    <p>Free for Mac and Windows.</p>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+      <a class="btn" id="dl-mac-2" download>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.37 12.64c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.47.83-.72 0-1.82-.81-3-.79-1.54.02-2.96.9-3.76 2.28-1.6 2.78-.41 6.9 1.15 9.16.76 1.1 1.67 2.34 2.86 2.3 1.15-.05 1.58-.74 2.97-.74 1.38 0 1.77.74 2.98.72 1.24-.02 2.02-1.12 2.77-2.23.88-1.28 1.24-2.52 1.26-2.59-.03-.01-2.41-.92-2.43-3.68zM14.1 5.9c.63-.77 1.06-1.83.94-2.9-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.27z"/></svg>
+        Download for Mac</a>
+      <a class="btn" id="dl-win-2" download>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.2 10.4 4.2v7.1H3zM11.3 4.1 21 2.8v8.5h-9.7zM3 12.2h7.4v7.1L3 18.3zM11.3 12.2H21v8.6l-9.7-1.3z"/></svg>
+        Download for Windows</a>
+    </div>
   </div>
 
   <footer>
@@ -445,8 +473,25 @@
   // Always points at the newest release, so publishing an update never requires editing this page.
   const repo = `https://github.com/${GITHUB_USER}/${GITHUB_REPO}`;
   const dmg = `${repo}/releases/latest/download/Airflow.dmg`;
+  const exe = `${repo}/releases/latest/download/Airflow-Windows.exe`;
   document.getElementById("dl-mac").href = dmg;
   document.getElementById("dl-mac-2").href = dmg;
+  document.getElementById("dl-win").href = exe;
+  document.getElementById("dl-win-2").href = exe;
+
+  // Highlight the download for this computer, and open its install steps.
+  const ua = navigator.userAgent;
+  const isWindows = /Windows/.test(ua);
+  const isPhone = /iPhone|iPad|Android/.test(ua);
+  if (isWindows) {
+    document.getElementById("dl-win").classList.remove("secondary");
+    document.getElementById("dl-mac").classList.add("secondary");
+    document.getElementById("help-win").open = true;
+    document.getElementById("help-mac").open = false;
+    const row = document.querySelector(".dl-row");
+    row.prepend(document.getElementById("dl-win"));
+  }
+  if (isPhone) document.getElementById("not-desktop").style.display = "block";
   document.getElementById("source").href = repo;
   document.getElementById("gh").href = repo;
   document.getElementById("all").href = `${repo}/releases`;
@@ -462,6 +507,15 @@
       const size = asset ? ` · ${Math.round(asset.size / 1e6)} MB` : "";
       document.getElementById("dl-meta").textContent =
         `Version ${latest.tag_name.replace(/^v/, "")} · macOS 12 or later · Apple silicon${size}`;
+      // The Windows build is attached a few minutes after each release; until then, offer the newest one that has it.
+      const winRel = list.find(r => !r.draft && (r.assets || []).some(a => a.name === "Airflow-Windows.exe"));
+      if (winRel) {
+        const a = winRel.assets.find(a => a.name === "Airflow-Windows.exe");
+        document.getElementById("dl-win").href = a.browser_download_url;
+        document.getElementById("dl-win-2").href = a.browser_download_url;
+        document.getElementById("dl-win-meta").textContent =
+          `Version ${winRel.tag_name.replace(/^v/, "")} · Windows 10 or 11 · 64-bit · ${Math.round(a.size / 1e6)} MB`;
+      }
 
       const box = document.getElementById("releases");
       box.textContent = "";
@@ -488,10 +542,6 @@
     })
     .catch(() => {});
 
-  // Airflow is Mac-only: tell visitors on other devices.
-  if (!/Mac/.test(navigator.userAgent) || /iPhone|iPad/.test(navigator.userAgent)) {
-    document.getElementById("not-mac").style.display = "block";
-  }
 </script>
 </body>
 </html>

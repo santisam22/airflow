@@ -1,6 +1,6 @@
 # Airflow
 
-A duct-building airflow puzzle game for Mac, inspired by DUCTWORKS on Roblox.
+A duct-building airflow puzzle game for Mac and Windows, inspired by DUCTWORKS on Roblox.
 Python + pygame-ce + numpy. Single player. `AIRFLOW_SPEC.md` has the full design.
 
 **Download:** https://santisam22.github.io/airflow/
@@ -14,6 +14,10 @@ Python + pygame-ce + numpy. Single player. `AIRFLOW_SPEC.md` has the full design
    git add -A && git commit -m "Airflow <version>: <summary>"
    ./release.sh "Short title"
    ```
+
+The Windows version is built by GitHub Actions (`.github/workflows/windows.yml`) on a Windows machine
+as soon as a release is published: it runs the tests, builds `Airflow-Windows.exe`, launches it once
+and attaches it to the release, usually within about 5 minutes.
 
 `build.sh` runs the play tests and builds `dist/Airflow.dmg`. It also writes `dist/Airflow-update.zip`
 and `dist/update.json`, signed with the Ed25519 key in your login Keychain (`macos/sign_tool.swift`).

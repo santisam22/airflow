@@ -1,1 +1,1 @@
-Every side of the air handler now gets full airflow, two stronger fan tiers, dampered junctions, and dampers that go in 10% steps down to fully shut.
+Airflow now runs on Windows too: download it from the website.
