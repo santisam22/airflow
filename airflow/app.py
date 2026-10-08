@@ -17,7 +17,7 @@ from .projects import PROJECTS, project, room_count
 from .render import PlanView, draw_part, draw_plan, flow_color
 from .roomair import colormap, speed_to_t
 from .state import UPGRADES, ActionError, Game, upgrade_cost
-from .updater import Updater, whats_new_after_update
+from .updater import Updater, cleanup_windows_leftovers, whats_new_after_update
 from .anim import DETAIL_CELLS, DETAIL_HZ, FlowAnimator
 from .home import HomeMixin
 from . import admin
@@ -77,6 +77,8 @@ class App(HomeMixin):
         self.hover_tile = None
         self.running = True
         self.updater = Updater()
+        if C.IS_WINDOWS:
+            cleanup_windows_leftovers()
         self.anim = FlowAnimator()
         self._ui_cache = {}
         self.t = 0.0                  # animation clock (seconds)
@@ -230,7 +232,7 @@ class App(HomeMixin):
             self.update(dt)
             self.draw()
             self._flip()
-            if smoke and time.time() - start > 3:
+            if smoke and time.time() - start > float(os.environ.get("AIRFLOW_SMOKE_SECS", "3")):
                 pygame.image.save(self.surf, smoke)
                 self.running = False
         self.game.save()
@@ -245,6 +247,12 @@ class App(HomeMixin):
             if self.updater.ready_to_quit:
                 self.running = False
         self.watch_updates()
+        if os.environ.get("AIRFLOW_TEST_UPDATE"):      # test hook: download and restart on its own
+            u = self.updater
+            if u.available and u.state == "idle":
+                self.start_download()
+            elif u.state == "downloaded":
+                self.restart_to_update()
         was_dirty = self.game.dirty
         self.game.tick(min(dt, 0.25))
         self.t += min(dt, 0.1)

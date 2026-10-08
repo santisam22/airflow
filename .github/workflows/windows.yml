@@ -39,6 +39,7 @@ jobs:
           SDL_VIDEODRIVER: dummy
         run: |
           python tests/test_flow.py
+          python tests/test_update.py
           python tests/test_play.py
 
       - name: Build Airflow.exe

@@ -1,0 +1,61 @@
+# End-to-end check of Windows self-updating against a real release: builds an old
+# copy of Airflow (version 0.0.1), points it at that release's update.json, and checks
+# that it downloads the signed .exe, swaps itself out and relaunches as the new version.
+name: Windows update test
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release to update to (e.g. v0.9.0)"
+        required: true
+
+jobs:
+  update:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Build an old copy (0.0.1)
+        shell: pwsh
+        run: |
+          pip install -r requirements.txt pillow
+          (Get-Content airflow/config.py) -replace '^VERSION = .*', 'VERSION = "0.0.1"' | Set-Content airflow/config.py
+          pyinstaller --noconfirm --onefile --windowed --name Airflow --exclude-module tkinter main.py
+          New-Item -ItemType Directory C:\game | Out-Null
+          Copy-Item dist\Airflow.exe C:\game\Airflow.exe
+      - name: Let it update itself
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.tag }}" -p update.json -D C:\rel --repo "${{ github.repository }}"
+          $want = (Get-Content C:\rel\update.json | ConvertFrom-Json).win_sha256
+          if (-not $want) { throw "update.json has no signed Windows build" }
+          $env:AIRFLOW_UPDATE_MANIFEST = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/update.json"
+          $env:AIRFLOW_TEST_UPDATE = "1"
+          $env:AIRFLOW_SMOKE = "C:\game\after.png"
+          $env:AIRFLOW_SMOKE_SECS = "25"
+          Start-Process C:\game\Airflow.exe -WorkingDirectory C:\game
+          $ok = $false
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep 2
+            $have = (Get-FileHash C:\game\Airflow.exe -Algorithm SHA256).Hash.ToLower()
+            if ($have -eq $want) { $ok = $true; break }
+          }
+          if (-not $ok) { throw "Airflow.exe was not replaced by the signed update" }
+          Write-Host "Airflow.exe replaced by the signed release build after $($i*2)s"
+          for ($i = 0; $i -lt 60 -and -not (Test-Path C:\game\after.png); $i++) { Start-Sleep 2 }
+          if (-not (Test-Path C:\game\after.png)) { throw "the updated game didn't start" }
+          Start-Sleep 3
+          if (Test-Path C:\game\Airflow.exe.old) { throw "the old copy wasn't cleaned up" }
+          Get-ChildItem C:\game | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: after-update-screenshot
+          path: C:\game\after.png

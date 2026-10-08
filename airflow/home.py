@@ -320,7 +320,7 @@ class HomeMixin:
             p.rect(th["panel2"], r, radius=8)
             p.text("RESTARTING…", 11, th["text"], (r[0] + r[2] / 2, r[1] + 16), "center", bold=True)
         else:
-            label = "TRY AGAIN" if u.state == "error" else ("DOWNLOAD UPDATE" if C.IS_MAC else "GET IT ON THE WEBSITE")
+            label = "TRY AGAIN" if u.state == "error" else "DOWNLOAD UPDATE"
             self._big_button(r, label, self.start_download, primary=True)
 
     def draw_banner(self):

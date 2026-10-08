@@ -1,1 +1,1 @@
-Smoother: air particles removed and the screen redraws far less, plus a new Easy/Normal difficulty in Settings.
+Windows copies of Airflow now download and install updates themselves, just like on Mac.
