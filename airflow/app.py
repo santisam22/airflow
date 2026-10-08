@@ -21,7 +21,6 @@ from .updater import Updater, whats_new_after_update
 from .anim import DETAIL_CELLS, DETAIL_HZ, FlowAnimator
 from .home import HomeMixin
 from . import admin
-from .particles import Particles
 
 TOP_H = 66
 TABS_H = 30
@@ -79,9 +78,10 @@ class App(HomeMixin):
         self.running = True
         self.updater = Updater()
         self.anim = FlowAnimator()
-        self.particles = Particles()
+        self._ui_cache = {}
         self.t = 0.0                  # animation clock (seconds)
         self._anim_dirty = True
+        self.easy = False             # difficulty (Normal by default)
         self.admin_key = ""           # set once a correct admin key has been entered
         self.admin_on = False
         self.popup = None             # tile whose damper window is open
@@ -105,6 +105,7 @@ class App(HomeMixin):
                 d = json.load(fh)
             self.dark = bool(d.get("dark", False))
             self.air_detail = max(0, min(2, int(d.get("air_detail", 1))))
+            self.easy = d.get("difficulty", "normal") == "easy"
             key = d.get("admin_key") or ""
             if key and admin.check(key):          # re-checked on every launch
                 self.admin_key = key
@@ -112,11 +113,13 @@ class App(HomeMixin):
         except (OSError, ValueError, TypeError):
             pass
         self.game.admin = bool(self.admin_key and self.admin_on)
+        self.game.easy = self.easy
 
     def save_settings(self):
         try:
             with open(self._settings_path(), "w") as fh:
                 json.dump({"dark": self.dark, "air_detail": self.air_detail,
+                           "difficulty": "easy" if self.easy else "normal",
                            "admin_key": self.admin_key, "admin_on": self.admin_on}, fh)
         except OSError:
             pass
@@ -250,16 +253,32 @@ class App(HomeMixin):
         if was_dirty or self._anim_dirty or self.anim.plan_num != self.game.current:
             if self.game.net is not None:
                 self.anim.on_sim(self.game, self.t, self.air_detail)
-                self.particles.on_sim(self.game.plan, self.game.layout, self.game.net)
                 self._anim_dirty = False
         self.anim.update(self.t, min(dt, 0.1), self.game.grid())
-        self.particles.update(min(dt, 0.05), self.air_detail)
         if time.time() - self.last_save > C.AUTOSAVE_SECONDS:
             try:
                 self.game.save()
             except OSError:
                 pass
             self.last_save = time.time()
+
+    def _mouse_in(self, r):
+        return tuple(self.mouse) if r.collidepoint(self.mouse) else None
+
+    def cached(self, name, rect, key, draw):
+        """Draw `draw()` into `rect`, or reuse the last picture (and its buttons) if `key` is unchanged."""
+        s = self.scale
+        pr = pygame.Rect(int(rect.x * s), int(rect.y * s), int(rect.w * s) + 1, int(rect.h * s) + 1)
+        pr = pr.clip(self.surf.get_rect())
+        hit = self._ui_cache.get(name)
+        if hit and hit[0] == key and hit[1].get_size() == pr.size:
+            self.surf.blit(hit[1], pr.topleft)
+            self.buttons.extend(hit[2])
+            return
+        n = len(self.buttons)
+        draw()
+        if pr.w > 0 and pr.h > 0:
+            self._ui_cache[name] = (key, self.surf.subsurface(pr).copy(), self.buttons[n:])
 
     # what the player sees: coverage as the air actually fills the rooms
     @property
@@ -303,17 +322,32 @@ class App(HomeMixin):
         show_ducts = self.view_mode in (0, 1)
         frame = self.anim.frame(self.t, DETAIL_HZ[self.air_detail])
         draw_plan(p, th, self.game, self.pv, show_heat, show_ducts, self.version, anim_frame=frame,
-                  duct_cells=DETAIL_CELLS[self.air_detail], room_cov=self.disp_rooms,
-                  particles=self.particles)
+                  duct_cells=DETAIL_CELLS[self.air_detail], room_cov=self.disp_rooms)
         if ui:
             self.draw_overlays(view)
-        self.draw_legend(view)
-        self.draw_topbar()
+        # The UI around the plan barely changes, so each part is redrawn only when its
+        # inputs change (or a few times a second for live numbers) and reused otherwise.
+        W, H = self.logical
+        tick = int(time.time() * 8)
+        base = (W, H, self.dark, self.scale, self.game.admin)
+        u = self.updater
+        self.cached("legend", pygame.Rect(0, view.y, view.x, view.h + 4),
+                    base + (tuple(view), round(self.disp_avg, 2)), lambda: self.draw_legend(view))
+        top = pygame.Rect(0, 0, W, TOP_H + TABS_H + 4)
+        self.cached("top", top, base + (tick, self.build_mode, self.panel, self._mouse_in(top),
+                                        bool(u.available), u.state, self.game.current), self.draw_topbar)
         if self.panel:
-            self.draw_panel(rects["panel"])
+            pr = rects["panel"].inflate(8, 10)
+            self.cached("panel", pr, base + (tick, self.panel, self._mouse_in(pr), self.key_focus, self.key_text,
+                                             self.air_detail, self.easy, self.settings_scroll_y(),
+                                             self.panel_scroll_y(), u.state),
+                        lambda: self.draw_panel(rects["panel"]))
         if self.build_mode:
-            self.draw_palette(rects["bottom"])
-        self.draw_hints(rects["hints"])
+            br = rects["bottom"].inflate(8, 10)
+            self.cached("palette", br, base + (self.category, round(self.palette_scroll), self.selected,
+                                               self.remove_mode, self._mouse_in(br), len(self.game.owned),
+                                               self.game.current), lambda: self.draw_palette(rects["bottom"]))
+        self.cached("hints", rects["hints"], base, lambda: self.draw_hints(rects["hints"]))
         if ui:
             if self.popup is None:
                 self.draw_tooltip(view)
@@ -659,6 +693,7 @@ class App(HomeMixin):
 
         y = choice("AIR DETAIL", ["LOW", "MEDIUM", "HIGH"], self.air_detail, self.set_detail, y)
         y = choice("INTERFACE", ["PAPER WHITE", "DARK"], 1 if self.dark else 0, self.set_dark, y)
+        y = choice("DIFFICULTY", ["EASY", "NORMAL"], 0 if self.easy else 1, self.set_difficulty, y)
 
         # updates
         u = self.updater
@@ -1136,6 +1171,12 @@ class App(HomeMixin):
         self._anim_dirty = True
         self.save_settings()
 
+    def set_difficulty(self, i):
+        self.easy = i == 0
+        self.game.easy = self.easy
+        self.game.dirty = True
+        self.save_settings()
+
     def set_dark(self, i):
         self.dark = bool(i)
         self.save_settings()
@@ -1144,6 +1185,7 @@ class App(HomeMixin):
         if getattr(self, "_reset_armed", 0) > time.time():
             self.game.reset()
             self.game.admin = bool(self.admin_key and self.admin_on)
+            self.game.easy = self.easy
             self.game.save()
             self.pv.fitted_for = None
             self.deselect()

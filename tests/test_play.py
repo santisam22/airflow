@@ -209,6 +209,10 @@ def main():
     assert g2.metal_used() > g2.metal_limit()
     g2.apply({"kind": "upgrade", "id": "blower"}); assert g2.upgrades["blower"] == 1 and g2.money == 0
     g2.apply({"kind": "buy_project", "num": 4}); assert 4 in g2.owned and g2.money == 0
+    # difficulty toggle lives in Settings and persists
+    lvl = 1 + 0.1 * app.game.upgrades["blower"]
+    app.set_difficulty(0); frame(app); assert app.game.easy and abs(app.game.net.blower_free - 290 * lvl) < 1e-6
+    app.set_difficulty(1); frame(app); assert not app.game.easy and abs(app.game.net.blower_free - 290 * 0.87 * lvl) < 1e-6
     print("all play tests passed")
 
 

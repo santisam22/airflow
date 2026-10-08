@@ -1,1 +1,1 @@
-New look closer to the original: air-filled registers, crisp furniture outlines, compact room labels, and a cleaner fan icon.
+Smoother: air particles removed and the screen redraws far less, plus a new Easy/Normal difficulty in Settings.

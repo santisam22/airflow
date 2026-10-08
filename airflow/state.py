@@ -50,6 +50,7 @@ class Game:
         self.total_cov = 0.0
         self.avg_speed = 0.0
         self.admin = False      # admin mode: everything free, no metal limit, all unlocks (not saved)
+        self.easy = False       # difficulty: Easy = full unit airflow, Normal = 13% less (a setting, not saved here)
 
     # ------------------------------------------------------------ helpers
     @property
@@ -98,7 +99,8 @@ class Game:
 
     # ------------------------------------------------------------ simulation
     def simulate(self):
-        self.net = solve(self.plan, self.layout, self.upgrades["blower"], self.upgrades["liner"])
+        base = C.BASE_FREE_CFM * (1.0 if self.easy else C.NORMAL_FACTOR)
+        self.net = solve(self.plan, self.layout, self.upgrades["blower"], self.upgrades["liner"], base)
         g = self.grid()
         self.speed = g.compute(self.layout, self.net)
         self.total_cov, self.room_cov, self.avg_speed = g.coverage()

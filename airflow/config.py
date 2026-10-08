@@ -4,7 +4,7 @@ import os
 import sys
 
 APP_NAME = "Airflow"
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 GITHUB_REPO = "santisam22/airflow"
 WEBSITE = "https://santisam22.github.io/airflow/"
@@ -17,7 +17,8 @@ CELLS = 4            # room-air simulation cells per tile edge
 
 # Airflow physics (arbitrary but self-consistent units)
 PMAX = 100.0             # blower shutoff pressure; static pressure % is P / PMAX
-BASE_FREE_CFM = 290.0    # blower airflow at Blower Motor level 0 (was 415 before 0.4.1)
+BASE_FREE_CFM = 290.0    # blower airflow at Blower Motor level 0, Easy difficulty
+NORMAL_FACTOR = 0.87     # Normal difficulty: 13% less airflow than Easy
 KSCALE = 3.0e-4          # resistance per unit loss coefficient K
 OPEN_END_K = 1.0         # an open duct end dumping into the attic
 AHU_PORT_K = 0.05

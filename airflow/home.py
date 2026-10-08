@@ -206,7 +206,7 @@ class HomeMixin:
     def _home_settings(self):
         p, th = self.p, self.theme
         W, H = self.logical
-        pw, ph = 460, 548
+        pw, ph = 460, 618
         x, y = W / 2 - pw / 2, max(12, H / 2 - ph / 2 - 20)
         self._panel(x, y, pw, ph)
         self._back(x + 20, y + 20)
@@ -216,6 +216,8 @@ class HomeMixin:
         yy = self._choice_row(ix, yy, iw, "AIR DETAIL", ["LOW", "MEDIUM", "HIGH"], self.air_detail, self.set_detail)
         yy = self._choice_row(ix, yy, iw, "INTERFACE", ["PAPER WHITE", "DARK MODE"], 1 if self.dark else 0,
                               self.set_dark)
+        yy = self._choice_row(ix, yy, iw, "DIFFICULTY", ["EASY", "NORMAL  (13% LESS AIR)"], 0 if self.easy else 1,
+                              self.set_difficulty)
         # updates
         u = self.updater
         p.text("UPDATES", 9, th["muted"], (ix, yy), bold=True)

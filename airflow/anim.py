@@ -308,8 +308,8 @@ class FlowAnimator:
         th, tw = tex.shape
         fx = (s * 9.0 - t * 11.0) % tw
         fy = np.clip(g.w, 0.0, 1.0) * (th - 1.001)
-        x0 = fx.astype(int)
-        y0 = fy.astype(int)
+        x0 = fx.astype(int) % tw          # (-tiny) % tw can round up to exactly tw
+        y0 = np.clip(fy.astype(int), 0, th - 2)
         ax, ay = fx - x0, fy - y0
         x1 = (x0 + 1) % tw
         n = ((tex[y0, x0] * (1 - ax) + tex[y0, x1] * ax) * (1 - ay)

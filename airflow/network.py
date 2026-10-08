@@ -78,7 +78,7 @@ class Result:
     room_cfm: dict = field(default_factory=dict)
     open_ports: dict = field(default_factory=dict)    # tile -> list of open dirs
     port_flow: dict = field(default_factory=dict)     # (tile, dir) -> CFM through that port
-    tree: dict = field(default_factory=dict)          # tile -> [(child tile, out dir, CFM)] for particles
+    tree: dict = field(default_factory=dict)          # tile -> [(child tile, out dir, CFM)]
     inflow: dict = field(default_factory=dict)        # tile -> port the air comes in through
 
 
@@ -108,10 +108,10 @@ def _port_k(pdef, pl, d, inflow):
     return k
 
 
-def solve(plan, layout, blower_level=0, liner_level=0):
+def solve(plan, layout, blower_level=0, liner_level=0, base_cfm=None):
     """layout: dict (x, y) -> placed dict {type, rot, aim, damper}."""
     res = Result()
-    q_free = C.BASE_FREE_CFM * (1.0 + 0.10 * blower_level)
+    q_free = (C.BASE_FREE_CFM if base_cfm is None else base_cfm) * (1.0 + 0.10 * blower_level)
     res.blower_free = q_free
     friction = max(0.05, 1.0 - 0.05 * liner_level)
     ahu = tuple(plan.ahu)

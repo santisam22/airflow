@@ -83,7 +83,9 @@ def main():
     place(g, "galv", 1, 4); place(g, "tee", 2, 4, 0); place(g, "regboot", 3, 4, 0); place(g, "galv", 2, 5, 1)
     g.simulate(); n = g.net
     assert n.leaked > 50 and n.delivered > 50, (n.leaked, n.delivered)   # a duct stub off the arm does leak
-    assert abs(n.blower_free - 290.0) < 1e-6
+    assert abs(n.blower_free - 290.0 * 0.87) < 1e-6           # Normal difficulty
+    g.easy = True; g.simulate()
+    assert abs(g.net.blower_free - 290.0) < 1e-6              # Easy: the full unit
 
     # 6. single-arrow registers are weaker than multi-way and premium diffusers
     def coverage(pid):
