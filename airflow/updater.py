@@ -50,12 +50,16 @@ def app_bundle():
     """Path of the running Airflow.app, or None when running from source."""
     if not getattr(sys, "frozen", False):
         return None
+    if not C.IS_MAC:
+        return None
     path = os.path.realpath(sys.executable)
-    while path and path != "/":
+    while True:
         if path.endswith(".app"):
             return path
-        path = os.path.dirname(path)
-    return None
+        parent = os.path.dirname(path)
+        if parent == path:            # reached the top ("/" here, "C:\\" on Windows)
+            return None
+        path = parent
 
 
 class Updater:

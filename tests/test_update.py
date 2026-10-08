@@ -89,6 +89,18 @@ def main():
         p.kill(); p.wait()
         assert ok is True, f"couldn't rename a running exe: {ok}"
         print("windows: renaming a running exe works")
+    # finding the app bundle must stop at the top of any drive (it used to loop forever on Windows)
+    import threading
+    saved = (sys.executable, getattr(sys, "frozen", None), C.IS_MAC)
+    sys.frozen, C.IS_MAC = True, True
+    sys.executable = os.path.join(d, "no", "bundle", "here.exe")
+    result = []
+    th = threading.Thread(target=lambda: result.append(U.app_bundle()), daemon=True)
+    th.start(); th.join(5)
+    sys.executable, C.IS_MAC = saved[0], saved[2]
+    if saved[1] is None:
+        del sys.frozen
+    assert result == [None], "app_bundle() didn't return"
     print("all update tests passed")
 
 
