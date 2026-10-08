@@ -57,6 +57,25 @@ jobs:
           Start-Sleep 3
           if (Test-Path C:\game\Airflow.exe.old) { throw "the old copy wasn't cleaned up" }
           Get-ChildItem C:\game | Format-Table Name, Length
+      - name: Run the release build directly (same settings)
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.tag }}" -p Airflow-Windows.exe -D C:\direct --repo "${{ github.repository }}"
+          $env:AIRFLOW_UPDATE_MANIFEST = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/update.json"
+          $env:AIRFLOW_TEST_UPDATE = "1"
+          $env:AIRFLOW_SMOKE = "C:\direct\shot.png"
+          $env:AIRFLOW_SMOKE_SECS = "25"
+          $p = Start-Process C:\direct\Airflow-Windows.exe -WorkingDirectory C:\direct -PassThru
+          $done = $p.WaitForExit(90000)
+          Write-Host "direct run exited by itself: $done  screenshot: $(Test-Path C:\direct\shot.png)"
+          $env:AIRFLOW_SMOKE_SECS = "3"; $env:AIRFLOW_TEST_UPDATE = ""
+          Remove-Item C:\direct\shot.png -ErrorAction SilentlyContinue
+          $p = Start-Process C:\direct\Airflow-Windows.exe -WorkingDirectory C:\direct -PassThru
+          $done = $p.WaitForExit(90000)
+          Write-Host "3s run (no test hook) exited by itself: $done  screenshot: $(Test-Path C:\direct\shot.png)"
       - name: Diagnostics
         if: always()
         shell: pwsh
