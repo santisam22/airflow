@@ -135,6 +135,7 @@ class App(HomeMixin):
         try:
             self.window = pygame.Window(C.APP_NAME, (w, h), resizable=True, allow_high_dpi=True)
             self.window.minimum_size = (1000, 640)
+            self._set_window_icon()
             self._refresh_surface()
         except Exception:
             self.window = None
@@ -143,6 +144,22 @@ class App(HomeMixin):
             self.surf = screen
             self.scale = 1.0
             self.logical = (w, h)
+
+    def _set_window_icon(self):
+        """The fan, for the title bar and the Windows taskbar (macOS uses the app's .icns)."""
+        S = 64
+        ic = pygame.Surface((S, S), pygame.SRCALPHA)
+        pygame.draw.rect(ic, (38, 72, 222), (2, 2, S - 4, S - 4), border_radius=14)
+        c, r = S / 2, S * 0.24
+        for k in range(3):
+            a = k * 2 * math.pi / 3 - math.pi / 2
+            pygame.draw.circle(ic, (255, 255, 255), (c + math.cos(a) * r * 0.55, c + math.sin(a) * r * 0.55), r * 0.48)
+        pygame.draw.circle(ic, (38, 72, 222), (c, c), S * 0.066)
+        pygame.draw.circle(ic, (255, 255, 255), (c, c), S * 0.031)
+        try:
+            self.window.set_icon(ic)
+        except Exception:
+            pass
 
     def _refresh_surface(self):
         if self.window is None:
@@ -764,9 +781,13 @@ class App(HomeMixin):
         icon = (r.x + 8, r.y + 10, 56, 56)
         p.rect(th["panel"], icon, radius=6)
         p.rect(th["border"], icon, width=1, radius=6)
-        placed = {"type": pdef.id, "rot": 0, "aim": 2, "open": 0.6}
+        # line drawing of the part, open where ducts connect (like the original's cards)
+        placed = {"type": pdef.id, "rot": 0, "aim": 2, "open": 0.6, "_joined": list(pdef.ports)}
         T = 40
-        draw_part(p, pdef, placed, icon[0] + 8, icon[1] + 8, T, th["panel"], th["outline"], theme=th)
+        ink = th["outline"] if not self.dark else th["text"]
+        ix, iy = icon[0] + 8, icon[1] + 8
+        draw_part(p, pdef, placed, ix, iy, T, th["panel"], ink, theme=th, stage="stroke")
+        draw_part(p, pdef, placed, ix, iy, T, th["panel"], ink, theme=th, stage="deco")
         tx = r.x + 72
         tw = r.w - 80
         fade = th["faint"]

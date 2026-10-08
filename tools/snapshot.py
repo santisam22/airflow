@@ -25,7 +25,8 @@ def shot(app, name, mouse=None):
     if mouse:
         app.mouse = mouse
         app.hover_tile = app.pv.tile_at(*mouse)
-    app.update(0.016)
+    for _ in range(240):              # let the air arrive, then settle it
+        app.update(1 / 60)
     app.anim.settle(app.t)
     app.update(0.016)
     app.draw()

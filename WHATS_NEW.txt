@@ -1,1 +1,1 @@
-Airflow now runs on Windows too: download it from the website.
+New look closer to the original: air-filled registers, crisp furniture outlines, compact room labels, and a cleaner fan icon.

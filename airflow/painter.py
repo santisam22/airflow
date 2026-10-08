@@ -35,8 +35,10 @@ LIGHT = {
     "faint": (170, 174, 184),
     "wall": (22, 22, 26),
     "door": (190, 192, 198),
-    "furn": (196, 198, 204),
-    "furn_text": (160, 163, 172),
+    "furn": (46, 48, 54),
+    "furn_fill": (120, 122, 128),
+    "furn_text": (70, 72, 80),
+    "label": (14, 14, 18),
     "accent": (38, 72, 222),
     "accent_soft": (226, 233, 255),
     "green": (96, 200, 60),
@@ -60,8 +62,10 @@ DARK = {
     "faint": (100, 105, 118),
     "wall": (226, 228, 234),
     "door": (88, 92, 104),
-    "furn": (74, 78, 90),
-    "furn_text": (110, 115, 128),
+    "furn": (178, 182, 194),
+    "furn_fill": (110, 114, 126),
+    "furn_text": (160, 165, 178),
+    "label": (240, 242, 246),
     "accent": (92, 128, 255),
     "accent_soft": (44, 54, 92),
     "green": (110, 210, 80),
@@ -131,6 +135,13 @@ class Painter:
             y -= h / 2
         self.surf.blit(img, (int(x * self.s), int(y * self.s)))
         return pygame.Rect(int(x), int(y), int(w), int(h))
+
+    def text_halo(self, txt, size, color, halo, pos, anchor="topleft", bold=False):
+        """Text with a thin outline around it, so it reads on any background."""
+        o = max(1.0, size * 0.09)
+        for dx, dy in ((-o, 0), (o, 0), (0, -o), (0, o), (-o, -o), (o, o), (-o, o), (o, -o)):
+            self.text(txt, size, halo, (pos[0] + dx, pos[1] + dy), anchor, bold)
+        return self.text(txt, size, color, pos, anchor, bold)
 
     def wrap(self, txt, size, width, bold=False):
         words = txt.split()
