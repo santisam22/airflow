@@ -9,6 +9,9 @@ on:
       tag:
         description: "Release to update to (e.g. v0.9.0)"
         required: true
+      ref:
+        description: "Source to build the old copy from (default: the same tag)"
+        required: false
 
 jobs:
   update:
@@ -16,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.ref || inputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"

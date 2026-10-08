@@ -351,7 +351,10 @@ def swap_windows(exe, new, relaunch):
         return False
     if relaunch:
         flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0    # DETACHED_PROCESS | NEW_PROCESS_GROUP
-        subprocess.Popen([exe], cwd=os.path.dirname(exe), creationflags=flags, close_fds=True)
+        # A one-file build started from inside another would reuse its parent's unpacked
+        # files, which vanish when this copy exits; this makes it a fresh, separate game.
+        env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+        subprocess.Popen([exe], cwd=os.path.dirname(exe), creationflags=flags, close_fds=True, env=env)
     return True
 
 
