@@ -1,1 +1,1 @@
-Windows copies of Airflow now download and install updates themselves, just like on Mac.
+Windows copies now download and install updates themselves, just like on Mac.
